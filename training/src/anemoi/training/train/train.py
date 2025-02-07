@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 import logging
 from functools import cached_property
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -409,11 +410,27 @@ class AnemoiTrainer:
 
         LOGGER.debug("Starting training..")
 
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+
+        max_entries = 1000000
+        torch.cuda.memory._record_memory_history(enabled=True, trace_alloc_max_entries=max_entries, trace_alloc_record_context=True)
+
         trainer.fit(
             self.model,
             datamodule=self.datamodule,
             ckpt_path=None if self.load_weights_only else self.last_checkpoint,
         )
+
+        try:
+            if torch.distributed.get_rank() == 0:
+                name = "snapshots/debug/" + "single-gt-val-" + str(os.environ.get("SNAPSHOT_NAME", "")) + ".pickle"
+                torch.cuda.memory._dump_snapshot(name)
+                print(f"Memory snapshot saved to {name}")
+        except Exception as e:
+            LOGGER.error(f"Failed to capture memory snapshot {e}")
+
+        torch.cuda.memory._record_memory_history(enabled=None)
 
         if self.config.diagnostics.print_memory_summary:
             LOGGER.debug("memory summary: %s", torch.cuda.memory_summary())

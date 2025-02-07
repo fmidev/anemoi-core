@@ -8,6 +8,7 @@
 # nor does it submit to any jurisdiction.
 
 
+import gc
 import logging
 from abc import ABC
 from abc import abstractmethod
@@ -15,6 +16,7 @@ from typing import Optional
 
 from torch import Tensor
 from torch import nn
+import torch
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch_geometric.typing import Adj
 from torch_geometric.typing import OptPairTensor
@@ -234,5 +236,7 @@ class GraphTransformerProcessorChunk(BaseProcessorChunk):
     ) -> OptPairTensor:
         for i in range(self.num_layers):
             x, edge_attr = self.blocks[i](x, edge_attr, edge_index, shapes, batch_size, model_comm_group, size=size)
+            if torch.distributed.get_rank() == 0:
+                print(f"Memory allocated after layer {i}: {torch.cuda.memory_allocated() / 1e6} MB")
 
         return x, edge_attr

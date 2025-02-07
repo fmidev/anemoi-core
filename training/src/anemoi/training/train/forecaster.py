@@ -451,24 +451,13 @@ class GraphForecaster(pl.LightningModule):
         )
         assert batch.shape[1] >= rollout + self.multi_step, msg
 
-        for rollout_step in range(rollout or self.rollout):
-            # prediction at rollout step rollout_step, shape = (bs, latlon, nvar)
-            y_pred = self(x)
+        # prediction at rollout step rollout_step, shape = (bs, latlon, nvar)
+        y_pred = self(x)
 
-            y = batch[:, self.multi_step + rollout_step, ..., self.data_indices.internal_data.output.full]
-            # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss = checkpoint(self.loss, y_pred, y, use_reentrant=False) if training_mode else None
+        loss = 0
+        metrics_next = {}
 
-            x = self.advance_input(x, y_pred, batch, rollout_step)
-
-            metrics_next = {}
-            if validation_mode:
-                metrics_next = self.calculate_val_metrics(
-                    y_pred,
-                    y,
-                    rollout_step,
-                )
-            yield loss, metrics_next, y_pred
+        return loss, metrics_next, y_pred
 
     def _step(
         self,
@@ -483,15 +472,14 @@ class GraphForecaster(pl.LightningModule):
         metrics = {}
         y_preds = []
 
-        for loss_next, metrics_next, y_preds_next in self.rollout_step(
+        loss_next, metrics, y_pred = self.rollout_step(
             batch,
             rollout=self.rollout,
             training_mode=True,
             validation_mode=validation_mode,
-        ):
-            loss += loss_next
-            metrics.update(metrics_next)
-            y_preds.extend(y_preds_next)
+        )
+
+        y_preds.append(y_pred)
 
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds
@@ -662,6 +650,9 @@ class GraphForecaster(pl.LightningModule):
         -------
         None
         """
+        # only thing that works so far (no linear activations accumulate in memory):
+        #for param in self.model.parameters():
+        #    param.requires_grad = False
         with torch.no_grad():
             val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
 
