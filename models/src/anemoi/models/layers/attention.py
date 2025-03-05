@@ -311,7 +311,7 @@ class FlashAttentionV3Wrapper(nn.Module):
             value,
             causal=False,
             window_size=(window_size, window_size),
-        )
+        )[0]
         out = einops.rearrange(out, "batch grid heads vars -> batch heads grid vars")
         return out
 
