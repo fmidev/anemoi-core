@@ -123,7 +123,11 @@ class MultiHeadSelfAttention(nn.Module):
         LOGGER.info(f"Using {self.attention_implementation}")
 
         # initalise the attn func here
-        self.attention = attn_funcs[self.attention_implementation]()
+        try:
+            self.attention = attn_funcs[self.attention_implementation]()
+        except ImportError:
+            LOGGER.info(f"'{self.attention_implementation}' could not be imported. Falling back to Scaled Dot Product Attention.")
+            self.attention = SDPAAttentionWrapper()
 
     def forward(
         self, x: Tensor, shapes: list, batch_size: int, model_comm_group: Optional[ProcessGroup] = None
@@ -218,7 +222,7 @@ class SDPAAttentionWrapper(nn.Module):
         if window_size is not None and (self.mask is None or tuple(self.mask.shape) != (sequence_len, sequence_len)):
             self.update_mask(sequence_len, window_size=window_size, device=query.device)
 
-        with torch.nn.attention.sdpa_kernel(backends=[torch.nn.attention.SDPBackend.MATH]):
+        with torch.nn.attention.sdpa_kernel(backends=[torch.nn.attention.SDPBackend.FLASH_ATTENTION]):
             out = self.attention(
                 query,
                 key,
@@ -278,7 +282,7 @@ class FlashAttentionWrapper(nn.Module):
         return out
 
 class FlashAttentionV3Wrapper(nn.Module):
-    """Wrapper for Flash attention."""
+    """Wrapper for Flash attention v3 - optimised for Hopper GPUs."""
 
     def __init__(self):
         super().__init__()
