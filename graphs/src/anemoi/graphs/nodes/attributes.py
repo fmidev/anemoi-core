@@ -221,6 +221,77 @@ class SphericalAreaWeights(BaseNodeAttribute):
         return result
 
 
+class BaseLatWeightedAttribute(BaseNodeAttribute, ABC):
+
+    @abstractmethod
+    def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray: ...
+
+    def get_raw_values(self, nodes: NodeStorage, **kwargs) -> np.ndarray:
+        lats_rad = nodes.x[:, 0]
+        return self.compute_latitude_weight(lats_rad)
+
+
+class PolynomialLatWeightedAttribute(BaseLatWeightedAttribute):
+    """Latitude-weighting of the node attributes as a function of a polynomial.
+
+    Attributes
+    ----------
+    poly_coefs : list[float]
+        Coefficients of the polynomial to build.
+    norm : str
+        Normalisation of the weights.
+
+    Methods
+    -------
+    compute(self, graph, nodes_name)
+        Compute the area attributes for each node.
+    """
+    def __init__(
+        self,
+        poly_coefs: list[float],
+        norm: str | None = None,
+        dtype: str = "float32",
+    ) -> None:
+        assert len(poly_coefs) > 0
+        super().__init__(norm, dtype)
+        self.poly = np.poly1d(poly_coefs)
+       
+    def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray:
+        return self.poly(latitudes)
+
+
+class CosineLatWeightedAttribute(BaseLatWeightedAttribute):
+    """Latitude-weighting of the node attributes as a function of a polynomial.
+
+    Attributes
+    ----------
+    min_value : float
+        Minimum value of the weights when the latitude is -pi/2 or pi/2 radians.
+    max_value : float
+        Maximum value of the weights when the latitude is 0 radians.
+    norm : str
+        Normalisation of the weights.
+
+    Methods
+    -------
+    compute(self, graph, nodes_name)
+        Compute the area attributes for each node.
+    """
+    def __init__(
+        self,
+        min_value: float = 0,
+        max_value: float = 1,
+        norm: str | None = None,
+        dtype: str = "float32",
+    ) -> None:
+        super().__init__(norm, dtype)
+        self.min_value = min_value
+        self.max_value = max_value
+    
+    def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray:
+        return (self.max_value - self.min_valaue) * np.cos(latitudes) + self.min_value
+
+
 class BooleanBaseNodeAttribute(BaseNodeAttribute, ABC):
     """Base class for boolean node attributes."""
 
