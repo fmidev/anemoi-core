@@ -18,9 +18,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from hydra.utils import instantiate
-from omegaconf import DictConfig
-from omegaconf import ListConfig
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from timm.scheduler import CosineLRScheduler
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.utils.checkpoint import checkpoint
@@ -29,17 +27,16 @@ from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.interface import AnemoiModelInterface
 from anemoi.training.losses.utils import grad_scaler
 from anemoi.training.losses.weightedloss import BaseWeightedLoss
-from anemoi.training.schemas.base_schema import BaseSchema
-from anemoi.training.schemas.base_schema import convert_to_omegaconf
-from anemoi.training.schemas.training import LossScalingSchema  # noqa: TC001
-from anemoi.training.schemas.training import PressureLevelScalerSchema  # noqa: TC001
-from anemoi.training.schemas.training import TrainingSchema  # noqa: TC001
-from anemoi.training.utils.masks import Boolean1DMask
-from anemoi.training.utils.masks import NoOutputMask
+from anemoi.training.schemas.base_schema import BaseSchema, convert_to_omegaconf
+from anemoi.training.schemas.training import (
+    LossScalingSchema,  # noqa: TC001
+    PressureLevelScalerSchema,  # noqa: TC001
+    TrainingSchema,  # noqa: TC001
+)
+from anemoi.training.utils.masks import Boolean1DMask, NoOutputMask
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-    from collections.abc import Mapping
+    from collections.abc import Generator, Mapping
 
     from torch.distributed.distributed_c10d import ProcessGroup
     from torch_geometric.data import HeteroData
@@ -253,6 +250,11 @@ class GraphForecaster(pl.LightningModule):
 
         # Instantiate the loss function with the loss_init_config
         kwargs["_recursive_"] = kwargs.get("_recursive_", False)
+        # related to spatial losses
+        if config.get("x_dim", None) is not None and config.get("y_dim", None) is not None:
+            kwargs["x_dim"] = config.x_dim
+            kwargs["y_dim"] = config.y_dim
+
         loss_function = instantiate(loss_config, **kwargs)
 
         if not isinstance(loss_function, BaseWeightedLoss):
