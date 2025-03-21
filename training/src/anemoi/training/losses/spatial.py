@@ -20,15 +20,22 @@ from anemoi.training.losses.weightedloss import FunctionalWeightedLoss
 LOGGER = logging.getLogger(__name__)
 
 
-def amplitude(spectrum):
+def amplitude(spectrum: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(spectrum.real**2 + spectrum.imag**2)
 
 
-def get_power_spectra_scalar_product(power_spectra_real, power_spectra_fake):
+def get_power_spectra_scalar_product(
+    power_spectra_real: torch.Tensor,
+    power_spectra_fake: torch.Tensor,
+) -> torch.Tensor:
     return power_spectra_real * power_spectra_fake.conj() + power_spectra_fake * power_spectra_real.conj()
 
 
-def get_spectra(fake_output, real_output, dims):
+def get_spectra(
+    fake_output: torch.Tensor,
+    real_output: torch.Tensor,
+    dims: tuple[int, int],
+) -> tuple[torch.Tensor, torch.Tensor]:
     assert dims[0] * dims[1] == real_output.shape[2]
     dims_total = (*real_output.shape[:2], *dims, real_output.shape[-1])
     power_spectra_real = torch.fft.rfft2(real_output.reshape(dims_total), dim=(-2, -3))
@@ -50,13 +57,6 @@ def log_rfft2_distance(fake_output: torch.Tensor, real_output: torch.Tensor, dim
     return torch.sqrt(torch.mean(log_10)) / 10
 
 
-def fourier_correlation(fake_output: torch.Tensor, real_output: torch.Tensor, dims: tuple[int, int]) -> torch.Tensor:
-    power_spectra_real, power_spectra_fake = get_spectra(fake_output, real_output, dims)
-    self.power_spectra_real = power_spectra_real
-    self.power_spectra_fake = power_spectra_fake
-    return get_power_spectra_scalar_product(power_spectra_real, power_spectra_fake).real
-
-
 class LogFFT2Distance(FunctionalWeightedLoss):
     r"""The log spectral distance is used to compute the difference between spectra of two fields.
 
@@ -74,7 +74,7 @@ class LogFFT2Distance(FunctionalWeightedLoss):
         super().__init__(node_weights, ignore_nans)
 
     def calculate_difference(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return log_rfft2_distance(pred, target)
+        return log_rfft2_distance(pred, target, dims=(self.x_dim, self.y_dim))
 
     def forward(
         self,
@@ -108,7 +108,10 @@ class FourierCorrelationLoss(FunctionalWeightedLoss):
         self.y_dim = y_dim
 
     def calculate_difference(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return fourier_correlation(pred, target, dims=(self.x_dim, self.y_dim))
+        power_spectra_real, power_spectra_fake = get_spectra(pred, target, dims=(self.x_dim, self.y_dim))
+        self.power_spectra_real = power_spectra_real
+        self.power_spectra_fake = power_spectra_fake
+        return get_power_spectra_scalar_product(power_spectra_real, power_spectra_fake).real
 
     def forward(
         self,
@@ -121,7 +124,11 @@ class FourierCorrelationLoss(FunctionalWeightedLoss):
     ) -> torch.Tensor:
         # scaling the scalar product with node weights
         scaled_scalar_product = super().forward(
-            pred, target, squash, scalar_indices=scalar_indices, without_scalars=without_scalars
+            pred,
+            target,
+            squash,
+            scalar_indices=scalar_indices,
+            without_scalars=without_scalars,
         )
         # the rest of the loss implies summing over spatial dimensions
         numerator = (1 / 2) * torch.sum(
@@ -134,6 +141,6 @@ class FourierCorrelationLoss(FunctionalWeightedLoss):
         denominator = torch.sqrt(
             torch.sum(amplitude(self.power_spectra_real) ** 2, dim=(-2, -3))
             * torch.sum(amplitude(self.power_spectra_fake) ** 2, dim=(-2, -3))
-            + epsilon
+            + epsilon,
         )
         return torch.mean(1 - numerator / denominator)
