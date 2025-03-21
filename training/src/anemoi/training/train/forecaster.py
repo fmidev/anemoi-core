@@ -18,7 +18,9 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from hydra.utils import instantiate
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig
+from omegaconf import ListConfig
+from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.utils.checkpoint import checkpoint
@@ -28,16 +30,17 @@ from anemoi.models.interface import AnemoiModelInterface
 from anemoi.training.losses.filtering import FilteringLossWrapper
 from anemoi.training.losses.utils import grad_scaler
 from anemoi.training.losses.weightedloss import BaseWeightedLoss
-from anemoi.training.schemas.base_schema import BaseSchema, convert_to_omegaconf
-from anemoi.training.schemas.training import (
-    LossScalingSchema,  # noqa: TC001
-    PressureLevelScalerSchema,  # noqa: TC001
-    TrainingSchema,  # noqa: TC001
-)
-from anemoi.training.utils.masks import Boolean1DMask, NoOutputMask
+from anemoi.training.schemas.base_schema import BaseSchema
+from anemoi.training.schemas.base_schema import convert_to_omegaconf
+from anemoi.training.schemas.training import LossScalingSchema  # noqa: TC001
+from anemoi.training.schemas.training import PressureLevelScalerSchema  # noqa: TC001
+from anemoi.training.schemas.training import TrainingSchema  # noqa: TC001
+from anemoi.training.utils.masks import Boolean1DMask
+from anemoi.training.utils.masks import NoOutputMask
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import Generator
+    from collections.abc import Mapping
 
     from torch.distributed.distributed_c10d import ProcessGroup
     from torch_geometric.data import HeteroData
@@ -205,8 +208,11 @@ class GraphForecaster(pl.LightningModule):
         """
         Wraps the instantiation of a loss function to allow selection of target and predicted variables.
 
-        This method creates a loss function based on the provided configuration. If the
-        configuration specifies a FilteringLossWrapper, it will recursively instantiate the wrapped loss and apply the FilteringLossWrapper using self.data_indices. Alternatively, if 'filter_wrap' is True, the instantiated loss function will be wrapped with FilteringLossWrapper to allow filtering of target/predicted variables before comparison.
+        This method creates a loss function based on the provided configuration.
+        If the configuration specifies a FilteringLossWrapper, it will recursively
+        instantiate the wrapped loss and apply the FilteringLossWrapper using self.data_indices.
+        Alternatively, if 'filter_wrap' is True, the instantiated loss function
+        will be wrapped with FilteringLossWrapper to allow filtering of target/predicted variables before comparison.
 
         Parameters
         ----------
@@ -225,6 +231,7 @@ class GraphForecaster(pl.LightningModule):
             An instantiated loss function (or a ModuleList of loss functions) optionally wrapped to filter
             target and predicted variables.
         """
+
         def full_name(type_: type) -> str:
             return type_.__module__ + "." + type_.__name__
 
