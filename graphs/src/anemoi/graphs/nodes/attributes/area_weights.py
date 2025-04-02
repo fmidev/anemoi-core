@@ -280,6 +280,7 @@ class PolynomialLatWeightedAttribute(BaseLatWeightedAttribute):
     compute(self, graph, nodes_name)
         Compute the area attributes for each node.
     """
+
     def __init__(
         self,
         poly_coefs: list[float],
@@ -289,7 +290,7 @@ class PolynomialLatWeightedAttribute(BaseLatWeightedAttribute):
         assert len(poly_coefs) > 0
         super().__init__(norm, dtype)
         self.poly = np.poly1d(poly_coefs)
-       
+
     def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray:
         return self.poly(latitudes)
 
@@ -311,6 +312,7 @@ class CosineLatWeightedAttribute(BaseLatWeightedAttribute):
     compute(self, graph, nodes_name)
         Compute the area attributes for each node.
     """
+
     def __init__(
         self,
         min_value: float = 0,
@@ -321,6 +323,6 @@ class CosineLatWeightedAttribute(BaseLatWeightedAttribute):
         super().__init__(norm, dtype)
         self.min_value = min_value
         self.max_value = max_value
-    
+
     def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray:
         return (self.max_value - self.min_valaue) * np.cos(latitudes) + self.min_value
