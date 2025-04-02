@@ -80,6 +80,8 @@ class AnemoiTrainer:
             or bool(self.config.training.fork_run_id)
             or bool(self.config.hardware.files.warm_start)
         )
+        LOGGER.info("Starting from checkpoint: %s", self.start_from_checkpoint)
+
         self.load_weights_only = self.config.training.load_weights_only
         self.parent_uuid = None
 
@@ -233,22 +235,38 @@ class AnemoiTrainer:
         """TensorBoard logger."""
         return get_tensorboard_logger(self.config)
 
-    def _get_warm_start_checkpoint(self, config: DictConfig) -> str | None:
+    def _get_warm_start_checkpoint(self, fork_id: str) -> str | None:
         """Returns the warm start checkpoint path if specified."""
-        warm_start = config.hardware.files.warm_start
+        warm_start = self.config.hardware.files.warm_start
         if warm_start:
             warm_start_path = Path(warm_start)
             # Use absolute path if provided, otherwise assume it's in a warm start directory
-            return (
-                warm_start_path
-                if warm_start_path.is_absolute()
-                else Path(config.hardware.paths.warm_starts) / warm_start
-            )
+            if warm_start_path.is_absolute():
+                return warm_start_path
+            if Path(self.config.hardware.paths.warm_starts):
+                return Path(self.config.hardware.paths.warm_starts) / warm_start
+            if Path.isfile(
+                Path(self.config.hardware.paths.checkpoints.parent, fork_id or self.lineage_run) / warm_start,
+            ):
+                return Path(self.config.hardware.paths.checkpoints.parent, fork_id or self.lineage_run) / warm_start
+            msg = "Warm start checkpoint not found: %s", warm_start_path
+            raise FileNotFoundError(msg)
         return None  # No warm start specified
 
-    def _get_checkpoint_directory(self, config: DictConfig, fork_id: str, lineage_run: str) -> Path:
+    def _get_checkpoint_directory(self, fork_id: str) -> Path:
         """Returns the directory where checkpoints are stored."""
-        return Path(config.hardware.paths.checkpoints.parent, fork_id or lineage_run)
+        return Path(self.config.hardware.paths.checkpoints.parent, fork_id or self.lineage_run)
+
+    def get_checkpoint(self, fork_id: str) -> Path:
+        checkpoint = self.get_checkpoint(fork_id)
+        # Usage
+        warm_start_path = self._get_warm_start_checkpoint(self.config)
+
+        if warm_start_path:
+            checkpoint = warm_start_path
+        else:
+            checkpoint = self._get_checkpoint_directory(self.config, fork_id, self.lineage_run) / "last.ckpt"
+        return checkpoint
 
     @cached_property
     def last_checkpoint(self) -> str | None:
@@ -257,14 +275,7 @@ class AnemoiTrainer:
             return None
 
         fork_id = self.fork_run_server2server or self.config.training.fork_run_id
-
-        # Usage
-        warm_start_path = self._get_warm_start_checkpoint(self.config)
-
-        if warm_start_path:
-            checkpoint = warm_start_path
-        else:
-            checkpoint = self._get_checkpoint_directory(self.config, fork_id, self.lineage_run) / "last.ckpt"
+        checkpoint = self.get_checkpoint(fork_id)
 
         # Check if the last checkpoint exists
         if Path(checkpoint).exists():
