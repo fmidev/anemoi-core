@@ -75,7 +75,11 @@ class AnemoiTrainer:
 
             LOGGER.info("Config validated.")
 
-        self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
+        self.start_from_checkpoint = (
+            bool(self.config.training.run_id)
+            or bool(self.config.training.fork_run_id)
+            or bool(self.config.hardware.files.warm_start)
+        )
         self.load_weights_only = self.config.training.load_weights_only
         self.parent_uuid = None
 
@@ -256,6 +260,7 @@ class AnemoiTrainer:
 
         # Usage
         warm_start_path = self._get_warm_start_checkpoint(self.config)
+
         if warm_start_path:
             checkpoint = warm_start_path
         else:
