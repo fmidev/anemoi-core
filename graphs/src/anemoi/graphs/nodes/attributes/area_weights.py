@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import logging
+from abc import abstractmethod
+from abc import ABC
 
 import numpy as np
 import torch
