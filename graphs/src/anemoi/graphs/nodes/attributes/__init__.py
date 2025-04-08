@@ -10,7 +10,6 @@
 from .area_weights import CosineLatWeightedAttribute
 from .area_weights import IsolatitudeAreaWeights
 from .area_weights import PlanarAreaWeights
-from .area_weights import PolynomialLatWeightedAttribute
 from .area_weights import SphericalAreaWeights
 from .area_weights import UniformWeights
 from .boolean_op import BooleanAndMask
@@ -29,6 +28,5 @@ __all__ = [
     "BooleanNot",
     "BooleanOrMask",
     "CosineLatWeightedAttribute",
-    "PolynomialLatWeightedAttribute",
     "IsolatitudeAreaWeights",
 ]

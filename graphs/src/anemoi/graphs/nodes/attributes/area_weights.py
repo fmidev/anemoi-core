@@ -269,36 +269,6 @@ class BaseLatWeightedAttribute(BaseNodeAttribute, ABC):
         return torch.from_numpy(weights)
 
 
-class PolynomialLatWeightedAttribute(BaseLatWeightedAttribute):
-    """Latitude-weighting of the node attributes as a function of a polynomial.
-
-    Attributes
-    ----------
-    poly_coefs : list[float]
-        Coefficients of the polynomial to build.
-    norm : str
-        Normalisation of the weights.
-
-    Methods
-    -------
-    compute(self, graph, nodes_name)
-        Compute the area attributes for each node.
-    """
-
-    def __init__(
-        self,
-        poly_coefs: list[float],
-        norm: str | None = None,
-        dtype: str = "float32",
-    ) -> None:
-        assert len(poly_coefs) > 0
-        super().__init__(norm, dtype)
-        self.poly = np.poly1d(poly_coefs)
-
-    def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray:
-        return self.poly(latitudes)
-
-
 class CosineLatWeightedAttribute(BaseLatWeightedAttribute):
     """Latitude-weighting of the node attributes as a function of a polynomial.
 
