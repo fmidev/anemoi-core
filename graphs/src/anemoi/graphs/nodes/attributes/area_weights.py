@@ -263,9 +263,10 @@ class BaseLatWeightedAttribute(BaseNodeAttribute, ABC):
     @abstractmethod
     def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray: ...
 
-    def get_raw_values(self, nodes: NodeStorage, **kwargs) -> np.ndarray:
-        lats_rad = nodes.x[:, 0]
-        return self.compute_latitude_weight(lats_rad)
+    def get_raw_values(self, nodes: NodeStorage, **kwargs) -> torch.Tensor:
+        lats_rad = nodes.x[:, 0].cpu().numpy()
+        weights = self.compute_latitude_weight(lats_rad)
+        return torch.from_numpy(weights)
 
 
 class PolynomialLatWeightedAttribute(BaseLatWeightedAttribute):
@@ -331,7 +332,7 @@ class CosineLatWeightedAttribute(BaseLatWeightedAttribute):
         return (self.max_value - self.min_value) * np.cos(latitudes) + self.min_value
 
 
-class IsolatitudeAreaWeights(BaseNodeAttribute):
+class IsolatitudeAreaWeights(BaseLatWeightedAttribute):
     """Latitude-weighted area weights for rectilinear grids.
 
     Attributes
@@ -352,11 +353,9 @@ class IsolatitudeAreaWeights(BaseNodeAttribute):
     where R is the earth radius and lat_1, lat_2 are in radians.
     """
 
-    def get_raw_values(self, nodes: NodeStorage, **kwargs) -> np.ndarray:
-        lats_rad = nodes.x[:, 0].cpu().numpy()
-
+    def compute_latitude_weight(self, latitudes: np.ndarray) -> np.ndarray:
         # Get the latitudes defining the bands
-        unique_lats = np.sort(np.unique(lats_rad))
+        unique_lats = np.sort(np.unique(latitudes))
         divisory_lats = (unique_lats[1:] + unique_lats[:-1]) / 2
         divisory_lats = np.concatenate([[-np.pi / 2], divisory_lats, [np.pi / 2]])
 
@@ -367,9 +366,9 @@ class IsolatitudeAreaWeights(BaseNodeAttribute):
 
         # Compute the number of points/nodes at each latitude band
         lat_to_ring = {lat: idx for idx, lat in enumerate(unique_lats)}
-        lat_rings = np.array([lat_to_ring[lat] for lat in lats_rad])
+        lat_rings = np.array([lat_to_ring[lat] for lat in latitudes])
         lat_counts = np.bincount(lat_rings, minlength=len(unique_lats))
 
         # Compute the area of each node
         area_km = dict(zip(unique_lats, ring_area_km / lat_counts))
-        return np.vectorize(area_km.get)(lats_rad)
+        return np.array([area_km[lat] for lat in latitudes])
