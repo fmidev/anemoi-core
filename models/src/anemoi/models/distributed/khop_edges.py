@@ -172,12 +172,16 @@ def drop_unconnected_src_nodes(x_src: Tensor, edge_index: Adj, num_nodes: tuple[
         reduced node features, relabeled edge index (contiguous, starting from 0)
     """
     connected_src_nodes = torch.unique(edge_index[0])
+    dst_nodes = torch.arange(num_nodes[1], device=x_src.device)
 
-    src_node_map = torch.zeros(num_nodes[0], dtype=torch.long, device=x_src.device)
-    src_node_map[connected_src_nodes] = torch.arange(connected_src_nodes.shape[0], device=x_src.device)
-    edge_index[0] = src_node_map[edge_index[0]]
+    edge_index_new, _ = bipartite_subgraph(
+        (connected_src_nodes, dst_nodes),
+        edge_index,
+        size=num_nodes,
+        relabel_nodes=True,
+    )
 
-    return x_src[connected_src_nodes], edge_index
+    return x_src[connected_src_nodes], edge_index_new
 
 
 def get_edges_sharding(
