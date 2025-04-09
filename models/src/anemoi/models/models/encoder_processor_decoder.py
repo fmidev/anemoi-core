@@ -26,7 +26,11 @@ from anemoi.models.layers.graph import NamedNodesAttributes
 from anemoi.models.layers.utils import load_layer_kernels
 from anemoi.utils.config import DotDict
 
+import os
+
 LOGGER = logging.getLogger(__name__)
+ANEMOI_ENCODER_CHUNKS = int(os.getenv("ANEMOI_ENCODER_CHUNKS", "0"))
+ANEMOI_DECODER_CHUNKS = int(os.getenv("ANEMOI_DECODER_CHUNKS", "0"))
 
 
 class AnemoiModelEncProcDec(nn.Module):
@@ -86,7 +90,6 @@ class AnemoiModelEncProcDec(nn.Module):
         )
 
         self.encoder_num_chunks = model_config.model.encoder.get("num_chunks", 1)
-        print(f"Encoder num chunks: {self.encoder_num_chunks}")
 
         # Processor hidden -> hidden
         self.processor = instantiate(
@@ -247,6 +250,10 @@ class AnemoiModelEncProcDec(nn.Module):
         batch_size = x.shape[0]
         ensemble_size = x.shape[2]
         in_out_sharded = grid_shard_slice is not None
+
+        self.encoder_num_chunks = self.encoder_num_chunks if ANEMOI_ENCODER_CHUNKS == 0 else ANEMOI_ENCODER_CHUNKS
+        self.decoder_num_chunks = self.decoder_num_chunks if ANEMOI_DECODER_CHUNKS == 0 else ANEMOI_DECODER_CHUNKS
+        print(f"{self.encoder_num_chunks=}, {self.encoder_num_chunks=}")
 
         # add data positional info (lat/lon)
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=batch_size)
