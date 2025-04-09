@@ -274,8 +274,6 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
 
         self.shard_strategy = shard_strategy
 
-        print(f"GraphTransformerBaseMapper: shard_strategy={shard_strategy}, num_chunks={num_chunks}")
-
     def prepare_edges(self, size, batch_size, model_comm_group=None):
         edge_attr = self.trainable(self.edge_attr, batch_size)
         edge_index = self._expand_edges(self.edge_index_base, self.edge_inc, batch_size)
@@ -297,7 +295,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
     ):
         x_src, x_dst = x
 
-        # TODO: don't checkpoint communication here, either move outside ckpt or exclude communication from checkpoint
+        # TODO: try move this outside of checkpoint
         if x_src_is_sharded:
             x_src = sync_tensor(x_src, 0, change_channels_in_shape(shard_shapes[0], x_src.shape[-1]), model_comm_group)
 
@@ -308,7 +306,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         size_src_full_dst_shard = (x_src.shape[0], x_dst.shape[0])
         x_src, edge_index = drop_unconnected_src_nodes(x_src, edge_index, size_src_full_dst_shard)
 
-        # TODO: maybe move this inside the chunked forward
+        # NOTE: maybe move this into proc_chunk
         x_src, x_dst, shapes_src, shapes_dst = self.pre_process(
             (x_src, x_dst), shard_shapes, model_comm_group, True, x_dst_is_sharded
         )  # x_sharded=True to not shard x_src again
@@ -417,7 +415,6 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
 
         size = (x_src.shape[0], x_dst.shape[0])  # node sizes of local graph shard
 
-        # TODO: special case for num_chunks = 1? (probably not needed)
         dst_chunks = partition_dst_nodes(
             edge_index, self.num_chunks, balanced=False, return_edge_counts=False
         )
@@ -445,7 +442,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
                     x_dst[dst_chunk],
                     shapes_dst,
                     model_comm_group,
-                    keep_x_dst_sharded=True, # allways keep sharded here, gather later if required
+                    keep_x_dst_sharded=True,
                     use_reentrant=False,
                 )
             if not keep_x_dst_sharded: # gather x_dst here instead if required
