@@ -11,55 +11,66 @@ yaml matches the BaseSchema.
    :no-undoc-members:
    :show-inheritance:
 
+The below schemas are organised below identically to the training config
+files,
+
+******
+ Data
+******
+
 .. automodule:: anemoi.training.schemas.data
    :members:
    :no-undoc-members:
    :show-inheritance:
+
+************
+ Dataloader
+************
 
 .. automodule:: anemoi.training.schemas.dataloader
    :members:
    :no-undoc-members:
    :show-inheritance:
 
+*************
+ Diagnostics
+*************
+
+.. automodule:: anemoi.training.schemas.diagnostics
+   :members:
+   :no-undoc-members:
+   :show-inheritance:
+
+**********
+ Hardware
+**********
+
 .. automodule:: anemoi.training.schemas.hardware
    :members:
    :no-undoc-members:
    :show-inheritance:
 
-.. automodule:: anemoi.training.schemas.graphs.basegraph
+*******
+ Graph
+*******
+
+.. automodule:: anemoi.graphs.schemas.base_graph
    :members:
    :no-undoc-members:
    :show-inheritance:
 
-.. automodule:: anemoi.training.schemas.graphs.node_schemas
+*******
+ Model
+*******
+
+.. automodule:: anemoi.models.schemas.models
    :members:
    :no-undoc-members:
    :show-inheritance:
 
-.. automodule:: anemoi.training.schemas.graphs.edge_schemas
-   :members:
-   :no-undoc-members:
-   :show-inheritance:
-
-.. automodule:: anemoi.training.schemas.models.models
-   :members:
-   :no-undoc-members:
-   :show-inheritance:
-
-.. automodule:: anemoi.training.schemas.models.processor
-   :members:
-   :no-undoc-members:
-   :show-inheritance:
-
-.. automodule:: anemoi.training.schemas.models.encoder
-   :members:
-   :no-undoc-members:
-   :show-inheritance:
-
-.. automodule:: anemoi.training.schemas.models.decoder
-   :members:
-   :no-undoc-members:
-   :show-inheritance:
+**********
+ Training
+**********
 
 .. automodule:: anemoi.training.schemas.training
    :members:

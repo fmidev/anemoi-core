@@ -19,9 +19,8 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
 from pydantic import NonNegativeInt
 
-from anemoi.training.schemas.utils import allowed_values
-
-from .utils import BaseModel
+from anemoi.utils.schemas import BaseModel
+from anemoi.utils.schemas.errors import allowed_values
 
 
 class Checkpoint(BaseModel):
@@ -34,10 +33,14 @@ class Checkpoint(BaseModel):
 
 
 class FilesSchema(PydanticBaseModel):
-    dataset: Union[Path, dict[str, Path]]  # dict option for multiple datasets
+    dataset: Union[Path, dict[str, Path], None] = Field(default=None)  # dict option for multiple datasets
     "Path to the dataset file."
-    graph: Union[Path, None] = Field(default=None)
+    graph: Union[Path, None] = None
     "Path to the graph file."
+    truncation: Union[Path, None] = None
+    "Path to the truncation matrix file."
+    truncation_inv: Union[Path, None] = None
+    "Path to the inverse truncation matrix file."
     checkpoint: dict[str, str]
     "Each dictionary key is a checkpoint name, and the value is the path to the checkpoint file."
     warm_start: Union[str, None] = None
@@ -53,19 +56,21 @@ class Logs(PydanticBaseModel):
 
 
 class PathsSchema(BaseModel):
-    data: Path
+    data: Union[Path, dict[str, Path], None] = None
     "Path to the data directory."
-    graph: Path
+    graph: Union[Path, None] = None
     "Path to the graph directory."
-    output: Path
+    truncation: Union[Path, None] = None
+    "Path to the truncation matrix directory."
+    output: Union[Path, None] = None
     "Path to the output directory."
-    logs: Logs
+    logs: Union[Logs, None] = None
     "Logging directories."
     checkpoints: Path
     "Path to the checkpoints directory."
-    plots: Path
+    plots: Union[Path, None] = None
     "Path to the plots directory."
-    profiler: Path
+    profiler: Union[Path, None]
     "Path to the profiler directory."
 
 
@@ -81,6 +86,8 @@ class HardwareSchema(BaseModel):
     "Number of nodes."
     num_gpus_per_model: NonNegativeInt = 1
     "Number of GPUs per model."
+    num_gpus_per_ensemble: NonNegativeInt = 1
+    "Number of GPUs per ensemble."
     files: FilesSchema
     "Files schema."
     paths: PathsSchema
