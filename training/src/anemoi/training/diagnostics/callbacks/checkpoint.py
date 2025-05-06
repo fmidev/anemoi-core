@@ -182,7 +182,7 @@ class AnemoiCheckpoint(ModelCheckpoint):
             tmp_supporting_arrays = model.supporting_arrays
             model.supporting_arrays = None
 
-            # Make sure we don't accidentally modidy these
+            # Make sure we don't accidentally modify these
             metadata = tmp_metadata.copy()
             supporting_arrays = tmp_supporting_arrays.copy()
 
@@ -199,8 +199,29 @@ class AnemoiCheckpoint(ModelCheckpoint):
             self._last_global_step_saved = trainer.global_step
 
         trainer.strategy.barrier()
+
+        # Add metadata to the traimer
+        checkpoint_uuid = str(uuid.uuid4())
+        trainer.lightning_module._hparams["metadata"]["uuid"] = checkpoint_uuid
+
+        trainer.lightning_module._hparams["metadata"]["model"] = self.model_metadata(model)
+        trainer.lightning_module._hparams["metadata"]["tracker"] = self.tracker_metadata(trainer)
+
+        trainer.lightning_module._hparams["metadata"]["training"] = {
+            "current_epoch": trainer.current_epoch,
+            "global_step": trainer.global_step,
+            "elapsed_time": time.time() - self.start,
+        }
+
         # saving checkpoint used for pytorch-lightning based training
         trainer.save_checkpoint(lightning_checkpoint_filepath, self.save_weights_only)
+
+        # Extract metdata
+        model = self._torch_drop_down(trainer)
+        metadata = model.metadata.copy()
+        supporting_arrays = model.supporting_arrays.copy()
+
+        save_metadata(lightning_checkpoint_filepath, metadata, supporting_arrays=supporting_arrays)
 
         self._last_global_step_saved = trainer.global_step
         self._last_checkpoint_saved = lightning_checkpoint_filepath
