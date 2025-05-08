@@ -200,34 +200,25 @@ class AnemoiCheckpoint(ModelCheckpoint):
 
         trainer.strategy.barrier()
 
-        # Add metadata to the traimer
-        checkpoint_uuid = str(uuid.uuid4())
-        trainer.lightning_module._hparams["metadata"]["uuid"] = checkpoint_uuid
-
-        trainer.lightning_module._hparams["metadata"]["model"] = self.model_metadata(model)
-        trainer.lightning_module._hparams["metadata"]["tracker"] = self.tracker_metadata(trainer)
-
-        trainer.lightning_module._hparams["metadata"]["training"] = {
-            "current_epoch": trainer.current_epoch,
-            "global_step": trainer.global_step,
-            "elapsed_time": time.time() - self.start,
-        }
-
         # saving checkpoint used for pytorch-lightning based training
         trainer.save_checkpoint(lightning_checkpoint_filepath, self.save_weights_only)
-
-        # Extract metdata
-        model = self._torch_drop_down(trainer)
-        metadata = model.metadata.copy()
-        supporting_arrays = model.supporting_arrays.copy()
-
-        save_metadata(lightning_checkpoint_filepath, metadata, supporting_arrays=supporting_arrays)
 
         self._last_global_step_saved = trainer.global_step
         self._last_checkpoint_saved = lightning_checkpoint_filepath
 
         if trainer.is_global_zero:
             from weakref import proxy
+
+            # Add a new uuid
+            checkpoint_uuid = str(uuid.uuid4())
+            trainer.lightning_module._hparams["metadata"]["uuid"] = checkpoint_uuid
+
+            # Extract and save metadata for lightning checkpoint
+            model = self._torch_drop_down(trainer)
+            metadata = model.metadata.copy()
+            supporting_arrays = model.supporting_arrays.copy()
+
+            save_metadata(lightning_checkpoint_filepath, metadata, supporting_arrays=supporting_arrays)
 
             # notify loggers
             for logger in trainer.loggers:
