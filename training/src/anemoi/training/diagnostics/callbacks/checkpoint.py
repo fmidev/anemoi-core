@@ -207,18 +207,22 @@ class AnemoiCheckpoint(ModelCheckpoint):
         self._last_checkpoint_saved = lightning_checkpoint_filepath
 
         if trainer.is_global_zero:
+            from importlib.metadata import version
             from weakref import proxy
 
-            # Add a new uuid
-            checkpoint_uuid = str(uuid.uuid4())
-            trainer.lightning_module._hparams["metadata"]["uuid"] = checkpoint_uuid
+            from packaging.version import Version
 
-            # Extract and save metadata for lightning checkpoint
-            model = self._torch_drop_down(trainer)
-            metadata = model.metadata.copy()
-            supporting_arrays = model.supporting_arrays.copy()
+            if Version(version("torch")) > Version("2.6"):
+                # Add a new uuid
+                checkpoint_uuid = str(uuid.uuid4())
+                trainer.lightning_module._hparams["metadata"]["uuid"] = checkpoint_uuid
 
-            save_metadata(lightning_checkpoint_filepath, metadata, supporting_arrays=supporting_arrays)
+                # Extract and save metadata for lightning checkpoint
+                model = self._torch_drop_down(trainer)
+                metadata = model.metadata.copy()
+                supporting_arrays = model.supporting_arrays.copy()
+
+                save_metadata(lightning_checkpoint_filepath, metadata, supporting_arrays=supporting_arrays)
 
             # notify loggers
             for logger in trainer.loggers:
