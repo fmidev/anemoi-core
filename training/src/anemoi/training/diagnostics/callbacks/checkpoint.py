@@ -212,7 +212,7 @@ class AnemoiCheckpoint(ModelCheckpoint):
 
             from packaging.version import Version
 
-            if Version(version("torch")) > Version("2.6"):
+            if Version(version("torch")) >= Version("2.6"):
                 # Add a new uuid
                 checkpoint_uuid = str(uuid.uuid4())
                 trainer.lightning_module._hparams["metadata"]["uuid"] = checkpoint_uuid
