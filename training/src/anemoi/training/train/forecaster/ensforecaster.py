@@ -104,7 +104,7 @@ class GraphEnsForecaster(GraphForecaster):
         self.ensemble_ic_generator = EnsembleInitialConditions(config=config, data_indices=data_indices)
 
     def forward(self, x: torch.Tensor, fcstep: int) -> torch.Tensor:
-        return self.model(x, fcstep, self.model_comm_group)
+        return self.model(x, fcstep, self.model_comm_group, self.grid_shard_slice, self.grid_shard_shapes)
 
     def set_ens_comm_group(
         self,
@@ -169,11 +169,14 @@ class GraphEnsForecaster(GraphForecaster):
             nens=nens_per_device,
             ndevices=ens_comm_group_size,
             memspacing=model_comm_group.size(),
+            offset=model_comm_group.rank(),
             mgroup=ens_comm_group,
             scale_gradients=True,
         )
+        # TODO(Jan): do smart allgather instead (allgather across ens group, but only same comm group ranks)
+
         # compute the loss
-        loss_inc = loss(y_pred_ens, y, squash=True)
+        loss_inc = loss(y_pred_ens, y, squash=True, grid_shard_slice=self.grid_shard_slice, group=model_comm_group)
 
         return loss_inc, y_pred_ens if return_pred_ens else None
 
@@ -279,8 +282,33 @@ class GraphEnsForecaster(GraphForecaster):
                     y_pred_ens_group,
                     y,
                     rollout_step,
+                    grid_shard_slice=self.grid_shard_slice,
                 )
             yield loss, metrics_next, y_pred_ens_group if validation_mode else [], ens_ic if validation_mode else None
+
+    def on_after_batch_transfer(self, batch: torch.Tensor, dataloader_idx: int) -> torch.Tensor:
+        """Assemble batch after transfer to GPU by gathering the batch shards if required.
+
+        Parameters
+        ----------
+        batch : torch.Tensor
+            Batch to transfer
+        dataloader_idx : int
+            Dataloader index
+
+        Returns
+        -------
+        torch.Tensor
+            Batch after transfer
+        """
+        if self.keep_batch_sharded:
+            self.grid_shard_shapes = self.grid_indices.shard_shapes
+            self.grid_shard_slice = self.grid_indices.get_shard_indices(self.reader_group_rank)
+        else:
+            batch = self.allgather_batch(batch)
+            self.grid_shard_shapes, self.grid_shard_slice = None, None
+
+        return batch
 
     def _step(
         self,
@@ -290,10 +318,6 @@ class GraphEnsForecaster(GraphForecaster):
     ) -> tuple:
         """Training / validation step."""
         del batch_idx
-
-        batch[0] = self.allgather_batch(batch[0])
-        if len(batch) == 2:
-            batch[1] = self.allgather_batch(batch[1])
 
         LOGGER.debug(
             "SHAPES: batch[0].shape = %s, batch[1].shape == %s",
@@ -317,6 +341,12 @@ class GraphEnsForecaster(GraphForecaster):
 
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds, _ens_ic
+
+    def allgather_batch(self, batch: torch.Tensor) -> torch.Tensor:
+        batch[0] = super().allgather_batch(batch[0])
+        if len(batch) == 2:
+            batch[1] = super().allgather_batch(batch[1])
+        return batch
 
     def training_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor | dict:
         """Run one training step.

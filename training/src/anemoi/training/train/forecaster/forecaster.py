@@ -224,10 +224,8 @@ class GraphForecaster(pl.LightningModule):
     def forward(
         self,
         x: torch.Tensor,
-        grid_shard_slice: slice | None = None,
-        grid_shard_shapes: list | None = None,
     ) -> torch.Tensor:
-        return self.model(x, self.model_comm_group, grid_shard_slice, grid_shard_shapes)
+        return self.model(x, self.model_comm_group, self.grid_shard_slice, self.grid_shard_shapes)
 
     # Future import breaks other type hints TODO Harrison Cook
     @staticmethod
@@ -466,18 +464,17 @@ class GraphForecaster(pl.LightningModule):
         y: torch.Tensor,
         rollout_step: int,
         validation_mode: bool = False,
-        grid_shard_slice: slice | None = None,
-        grid_shard_shapes: list | None = None,
     ) -> torch.Tensor:
-        is_sharded = grid_shard_slice is not None
+        is_sharded = self.grid_shard_slice is not None
         sharding_supported = self.metrics_support_sharding or not validation_mode  # loss always supports sharding
         if is_sharded and not sharding_supported:  # gather tensors if loss and metrics do not support sharding
-            shard_shapes = apply_shard_shapes(y_pred, self.grid_dim, grid_shard_shapes)
+            shard_shapes = apply_shard_shapes(y_pred, self.grid_dim, self.grid_shard_shapes)
             y_pred_full = gather_tensor(torch.clone(y_pred), self.grid_dim, shard_shapes, self.model_comm_group)
             y_full = gather_tensor(torch.clone(y), self.grid_dim, shard_shapes, self.model_comm_group)
-            grid_shard_slice, grid_shard_shapes = None, None
+            grid_shard_slice = None
         else:
             y_pred_full, y_full = y_pred, y
+            grid_shard_slice = self.grid_shard_slice
 
         loss = self.loss(
             y_pred_full,
@@ -503,8 +500,6 @@ class GraphForecaster(pl.LightningModule):
         rollout: int | None = None,
         training_mode: bool = True,
         validation_mode: bool = False,
-        grid_shard_slice: slice | None = None,
-        grid_shard_shapes: list | None = None,
     ) -> Generator[tuple[torch.Tensor | None, dict, list], None, None]:
         """Rollout step for the forecaster.
 
@@ -552,7 +547,7 @@ class GraphForecaster(pl.LightningModule):
 
         for rollout_step in range(rollout or self.rollout):
             # prediction at rollout step rollout_step, shape = (bs, latlon, nvar)
-            y_pred = self(x, grid_shard_slice, grid_shard_shapes)
+            y_pred = self(x)
 
             y = batch[:, self.multi_step + rollout_step, ..., self.data_indices.internal_data.output.full]
             # y includes the auxiliary variables, so we must leave those out when computing the loss
@@ -563,8 +558,6 @@ class GraphForecaster(pl.LightningModule):
                     y,
                     rollout_step,
                     validation_mode,
-                    grid_shard_slice,
-                    grid_shard_shapes,
                     use_reentrant=False,
                 )
                 if training_mode
@@ -575,6 +568,30 @@ class GraphForecaster(pl.LightningModule):
 
             yield loss, metrics_next, y_pred
 
+    def on_after_batch_transfer(self, batch: torch.Tensor, dataloader_idx: int) -> torch.Tensor:
+        """Assemble batch after transfer to GPU by gathering the batch shards if needed.
+
+        Parameters
+        ----------
+        batch : torch.Tensor
+            Batch to transfer
+        dataloader_idx : int
+            Dataloader index
+
+        Returns
+        -------
+        torch.Tensor
+            Batch after transfer
+        """
+        if self.keep_batch_sharded:
+            self.grid_shard_shapes = self.grid_indices.shard_shapes
+            self.grid_shard_slice = self.grid_indices.get_shard_indices(self.reader_group_rank)
+        else:
+            batch = self.allgather_batch(batch)
+            self.grid_shard_shapes, self.grid_shard_slice = None, None
+
+        return batch
+
     def _step(
         self,
         batch: torch.Tensor,
@@ -582,12 +599,6 @@ class GraphForecaster(pl.LightningModule):
         validation_mode: bool = False,
     ) -> tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         del batch_idx
-        if self.keep_batch_sharded:
-            grid_shard_shapes = self.grid_indices.shard_shapes
-            grid_shard_slice = self.grid_indices.get_shard_indices(self.reader_group_rank)
-        else:
-            batch = self.allgather_batch(batch)
-            grid_shard_shapes, grid_shard_slice = None, None
 
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         metrics = {}
@@ -598,8 +609,6 @@ class GraphForecaster(pl.LightningModule):
             rollout=self.rollout,
             training_mode=True,
             validation_mode=validation_mode,
-            grid_shard_slice=grid_shard_slice,
-            grid_shard_shapes=grid_shard_shapes,
         ):
             loss += loss_next
             metrics.update(metrics_next)

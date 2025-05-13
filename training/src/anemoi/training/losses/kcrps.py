@@ -10,11 +10,16 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import einops
 import torch
 
+from anemoi.models.distributed.graph import reduce_tensor
 from anemoi.training.losses.weightedloss import BaseWeightedLoss
+
+if TYPE_CHECKING:
+    from torch.distributed.distributed_c10d import ProcessGroup
 
 LOGGER = logging.getLogger(__name__)
 
@@ -175,6 +180,8 @@ class AlmostFairKernelCRPS(BaseWeightedLoss):
         *,
         scalar_indices: tuple[int, ...] | None = None,
         without_scalars: list[str] | list[int] | None = None,
+        grid_shard_slice: slice | None = None,
+        group: ProcessGroup | None = None,
     ) -> torch.Tensor:
 
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
@@ -190,16 +197,22 @@ class AlmostFairKernelCRPS(BaseWeightedLoss):
         kcrps_ = einops.rearrange(kcrps_, "bs v latlon -> bs latlon v")
 
         kcrps_ = self.scale(kcrps_, scalar_indices, without_scalars=without_scalars)
-        kcrps_ = kcrps_ * self.node_weights[:, None]
+
+        # Apply the (local) node weights
+        is_sharded = grid_shard_slice is not None
+        node_weights_local = self.node_weights[grid_shard_slice] if is_sharded else self.node_weights
+        kcrps_ = kcrps_ * node_weights_local[:, None]
 
         # divide by (weighted point count) * (batch size)
         npoints = torch.sum(self.node_weights)
         if squash:
-            return kcrps_.sum() / (npoints * bs_)
+            loss = kcrps_.sum() / (npoints * bs_)
+            return reduce_tensor(loss, group) if is_sharded else loss
 
         # sum only across the batch dimension; enable this to generate per-variable CRPS "maps"
         loss = kcrps_.sum(dim=0) / bs_
-        return loss.sum(dim=0) / self.node_weights.sum()
+        loss = loss.sum(dim=0) / self.node_weights.sum()
+        return reduce_tensor(loss, group) if is_sharded else loss
 
     @property
     def name(self) -> str:

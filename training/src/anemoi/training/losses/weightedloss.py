@@ -152,24 +152,21 @@ class BaseWeightedLoss(nn.Module, ABC):
             Scaled error tensor
         """
         is_sharded = grid_shard_slice is not None
-        node_weights = self.node_weights[grid_shard_slice] if is_sharded else self.node_weights
+        global_weight_sum = self.sum_function(self.node_weights)
+        local_node_weights = self.node_weights[grid_shard_slice] if is_sharded else self.node_weights
 
         if squash:
             x = self.avg_function(x, dim=-1)
             # Weight by area,
-            x *= node_weights.expand_as(x)
-            local_weight_sum = self.sum_function(node_weights.expand_as(x))
-            global_weight_sum = reduce_tensor(local_weight_sum, group) if is_sharded else local_weight_sum
+            x *= local_node_weights.expand_as(x)
             x /= global_weight_sum
             out = self.sum_function(x)
 
             return reduce_tensor(out, group) if is_sharded else out
 
         # Weight by area, due to weighting construction is analagous to a mean
-        x *= node_weights[..., None].expand_as(x)
+        x *= local_node_weights[..., None].expand_as(x)
         # keep last dimension (variables) when summing weights
-        local_weight_sum = self.sum_function(node_weights[..., None].expand_as(x), dim=(0, 1, 2))
-        global_weight_sum = reduce_tensor(local_weight_sum, group) if is_sharded else local_weight_sum
         out = x / global_weight_sum
 
         return reduce_tensor(out, group) if is_sharded else out

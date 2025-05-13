@@ -152,7 +152,8 @@ class AnemoiModelEncProcDec(nn.Module):
         return A_
 
     def _multiply_sparse(self, x, A):
-        return torch.sparse.mm(A, x)
+        res = torch.sparse.mm(A, x)
+        return res
 
     def _truncate_fields(self, x, A, batch_size=None, grad_checkpoint=False):
         if not batch_size:
@@ -169,8 +170,10 @@ class AnemoiModelEncProcDec(nn.Module):
     def _assemble_input(self, x, batch_size, grid_shard_slice=None):
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=batch_size)
         if grid_shard_slice is not None:
-            node_attributes_data = node_attributes_data[grid_shard_slice, :]
-        
+            node_attributes_data = node_attributes_data[
+                grid_shard_slice, :
+            ]  # TODO(Jan): shard_tensor instead for gradient ?
+
         # normalize and add data positional info (lat/lon)
         x_data_latent = torch.cat(
             (
@@ -186,6 +189,8 @@ class AnemoiModelEncProcDec(nn.Module):
             # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
             # hence we check that they are on the correct device ; copy should only happen in the first forward run
             if self.A_down is not None:
+                if grid_shard_slice is not None:
+                    self.A_down = self._make
                 self.A_down = self.A_down.to(x_skip.device)
                 x_skip = self._truncate_fields(x_skip, self.A_down)  # to coarse resolution
             if self.A_up is not None:
@@ -294,8 +299,8 @@ class AnemoiModelEncProcDec(nn.Module):
         self,
         x: Tensor,
         model_comm_group: Optional[ProcessGroup] = None,
-        grid_shard_slice: slice = None,
-        grid_shard_shapes: list = None,
+        grid_shard_slice: Optional[slice] = None,
+        grid_shard_shapes: Optional[list] = None,
     ) -> Tensor:
         """Forward pass of the model.
 
@@ -319,7 +324,7 @@ class AnemoiModelEncProcDec(nn.Module):
         ensemble_size = x.shape[2]
         in_out_sharded = grid_shard_slice is not None
 
-        x_data_latent, x_skip = self._assemble_input(x, batch_size)
+        x_data_latent, x_skip = self._assemble_input(x, batch_size, grid_shard_slice)
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
 
         if grid_shard_shapes is None:
