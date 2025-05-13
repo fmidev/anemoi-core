@@ -152,8 +152,7 @@ class AnemoiModelEncProcDec(nn.Module):
         return A_
 
     def _multiply_sparse(self, x, A):
-        res = torch.sparse.mm(A, x)
-        return res
+        return torch.sparse.mm(A, x)
 
     def _truncate_fields(self, x, A, batch_size=None, grad_checkpoint=False):
         if not batch_size:
