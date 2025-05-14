@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch.utils.checkpoint import checkpoint
 
-from anemoi.training.distributed.ensemble import gather_ensemble_members
+from anemoi.models.distributed.graph import gather_tensor
 from anemoi.training.utils.inicond import EnsembleInitialConditions
 
 from .forecaster import GraphForecaster
@@ -120,6 +120,20 @@ class GraphEnsForecaster(GraphForecaster):
         self.ens_comm_num_groups = ens_comm_num_groups
         self.ens_comm_group_size = ens_comm_group_size
 
+    def set_ens_comm_subgroup(
+        self,
+        ens_comm_subgroup: ProcessGroup,
+        ens_comm_subgroup_id: int,
+        ens_comm_subgroup_rank: int,
+        ens_comm_subgroup_num_groups: int,
+        ens_comm_subgroup_size: int,
+    ) -> None:
+        self.ens_comm_subgroup = ens_comm_subgroup
+        self.ens_comm_subgroup_id = ens_comm_subgroup_id
+        self.ens_comm_subgroup_rank = ens_comm_subgroup_rank
+        self.ens_comm_subgroup_num_groups = ens_comm_subgroup_num_groups
+        self.ens_comm_subgroup_size = ens_comm_subgroup_size
+
     def gather_and_compute_loss(
         self,
         y_pred: torch.Tensor,
@@ -162,18 +176,12 @@ class GraphEnsForecaster(GraphForecaster):
         """
         # gather ensemble members,
         # full ensemble is only materialised on GPU in checkpointed region
-        y_pred_ens = gather_ensemble_members(
-            y_pred.clone(),  # for bwd because we checkpoint this region
+        y_pred_ens = gather_tensor(
+            y_pred.clone(),
             dim=1,
             shapes=[y_pred.shape] * ens_comm_group_size,
-            nens=nens_per_device,
-            ndevices=ens_comm_group_size,
-            memspacing=model_comm_group.size(),
-            offset=model_comm_group.rank(),
-            mgroup=ens_comm_group,
-            scale_gradients=True,
+            mgroup=self.ens_comm_subgroup,
         )
-        # TODO(Jan): do smart allgather instead (allgather across ens group, but only same comm group ranks)
 
         # compute the loss
         loss_inc = loss(y_pred_ens, y, squash=True, grid_shard_slice=self.grid_shard_slice, group=model_comm_group)
