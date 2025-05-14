@@ -79,6 +79,7 @@ def test_latweighted(attr_class: Type[BaseNodeAttribute], graph_with_rectilinear
 
     assert weights is not None
     assert isinstance(weights, torch.Tensor)
+    assert torch.all(weights >= 0)
     assert weights.shape[0] == graph_with_rectilinear_nodes["test_nodes"].x.shape[0]
     assert weights.dtype == node_attr_builder.dtype
 
