@@ -72,9 +72,10 @@ def test_spherical_area_weights_wrong_fill_value(fill_value: str):
 
 
 @pytest.mark.parametrize("attr_class", [IsolatitudeAreaWeights, CosineLatWeightedAttribute])
-def test_latweighted(attr_class: Type[BaseNodeAttribute], graph_with_rectilinear_nodes):
+@pytest.mark.parametrize("norm", [None, "l1", "unit-max"])
+def test_latweighted(attr_class: Type[BaseNodeAttribute], graph_with_rectilinear_nodes, norm: str):
     """Test attribute builder for Lat with different fill values."""
-    node_attr_builder = attr_class(norm="l1")
+    node_attr_builder = attr_class(norm=norm)
     weights = node_attr_builder.compute(graph_with_rectilinear_nodes, "test_nodes")
 
     assert weights is not None
