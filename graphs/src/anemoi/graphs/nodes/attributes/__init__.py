@@ -9,6 +9,7 @@
 
 from .area_weights import CosineLatWeightedAttribute
 from .area_weights import IsolatitudeAreaWeights
+from .area_weights import MaskedPlanarAreaWeights
 from .area_weights import PlanarAreaWeights
 from .area_weights import SphericalAreaWeights
 from .area_weights import UniformWeights
@@ -23,6 +24,7 @@ __all__ = [
     "PlanarAreaWeights",
     "UniformWeights",
     "CutOutMask",
+    "MaskedPlanarAreaWeights",
     "NonmissingAnemoiDatasetVariable",
     "BooleanAndMask",
     "BooleanNot",

@@ -15,6 +15,7 @@ from torch_geometric.data import HeteroData
 
 from anemoi.graphs.nodes.attributes import CosineLatWeightedAttribute
 from anemoi.graphs.nodes.attributes import IsolatitudeAreaWeights
+from anemoi.graphs.nodes.attributes import MaskedPlanarAreaWeights
 from anemoi.graphs.nodes.attributes import PlanarAreaWeights
 from anemoi.graphs.nodes.attributes import SphericalAreaWeights
 from anemoi.graphs.nodes.attributes import UniformWeights
@@ -80,3 +81,24 @@ def test_latweighted(attr_class: Type[BaseNodeAttribute], graph_with_rectilinear
     assert isinstance(weights, torch.Tensor)
     assert weights.shape[0] == graph_with_rectilinear_nodes["test_nodes"].x.shape[0]
     assert weights.dtype == node_attr_builder.dtype
+
+
+def test_masked_planar_area_weights(graph_with_nodes: HeteroData):
+    """Test attribute builder for PlanarAreaWeights."""
+    node_attr_builder = MaskedPlanarAreaWeights(mask_node_attr_name="interior_mask")
+    weights = node_attr_builder.compute(graph_with_nodes, "test_nodes")
+
+    assert weights is not None
+    assert isinstance(weights, torch.Tensor)
+    assert weights.shape[0] == graph_with_nodes["test_nodes"].x.shape[0]
+    assert weights.dtype == node_attr_builder.dtype
+
+    mask = graph_with_nodes["test_nodes"]["interior_mask"]
+    assert torch.all(weights[~mask] == 0)
+
+
+def test_masked_planar_area_weights_fail(graph_with_nodes: HeteroData):
+    """Test attribute builder for AreaWeights with invalid radius."""
+    with pytest.raises(AssertionError):
+        node_attr_builder = MaskedPlanarAreaWeights(mask_node_attr_name="nonexisting")
+        node_attr_builder.compute(graph_with_nodes, "test_nodes")
