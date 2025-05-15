@@ -95,7 +95,7 @@ def _gather(
 
     all_shards_equal_shape = all(shape == shapes[0] for shape in shapes)
 
-    if all_shards_equal_shape:  # requirement for all_gather_into_tensor (should be the case)
+    if dim_ == 0 and all_shards_equal_shape:  # requirement for all_gather_into_tensor
         out_shape = list(input_.shape)
         out_shape[dim_] = sum(shape[dim_] for shape in shapes)
 

@@ -404,7 +404,7 @@ class DDPEnsGroupStrategy(DDPStrategy):
         # ens_comm_subgroup: subgroup of same model_comm_group ranks inside the ensemble group
         spacing = self.model_comm_group_size
         ens_comm_subgroup_ranks = [
-            ens_comm_group[offset::spacing] for offset in range(spacing) for ens_comm_group in ens_comm_group_ranks
+            ens_comm_group[offset::spacing] for ens_comm_group in ens_comm_group_ranks for offset in range(spacing)
         ]
 
         ens_comm_subgroups = [torch.distributed.new_group(x) for x in ens_comm_subgroup_ranks]
@@ -427,13 +427,18 @@ class DDPEnsGroupStrategy(DDPStrategy):
 
         LOGGER.info(
             "Rank %d ens_comm_group_id: %d ens_comm_group: %s ens_comm_group_rank: %d "
-            "ens_comm_group_size: %d ens_comm_group.size(): %d",
+            "ens_comm_group_size: %d ens_comm_group.size(): %d ens_comm_subgroup_id: %d "
+            "ens_comm_subgroup: %s ens_comm_subgroup_rank: %d ens_comm_subgroup.size(): %d ",
             self.global_rank,
             ens_comm_group_id,
             str(ens_comm_group_ranks[ens_comm_group_id]),
             ens_comm_group_rank,
             self.ens_comm_group_size,
             ens_comm_group.size(),
+            ens_comm_subgroup_id,
+            str(ens_comm_subgroup_ranks[ens_comm_subgroup_id]),
+            ens_comm_subgroup_rank,
+            ens_comm_subgroup_size,
         )
 
         # register hooks for correct gradient reduction

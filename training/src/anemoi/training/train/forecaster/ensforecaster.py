@@ -177,7 +177,7 @@ class GraphEnsForecaster(GraphForecaster):
         # gather ensemble members,
         # full ensemble is only materialised on GPU in checkpointed region
         y_pred_ens = gather_tensor(
-            y_pred.clone(),
+            y_pred.clone(),  # for bwd because we checkpoint this region
             dim=1,
             shapes=[y_pred.shape] * ens_comm_group_size,
             mgroup=self.ens_comm_subgroup,
