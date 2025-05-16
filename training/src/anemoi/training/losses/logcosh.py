@@ -16,10 +16,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
-from anemoi.training.losses.weightedloss import BaseWeightedLoss
-
-if TYPE_CHECKING:
-    from torch.distributed.distributed_c10d import ProcessGroup
+from anemoi.training.losses.base import FunctionalLoss
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,44 +36,13 @@ class LogCosh(torch.autograd.Function):
         return grad_output * torch.tanh(inp)
 
 
-class WeightedLogCoshLoss(BaseWeightedLoss):
-    """Node-weighted LogCosh loss."""
+class LogCoshLoss(FunctionalLoss):
+    """LogCosh loss."""
 
-    name = "wlogcosh"
+    name: str = "logcosh"
 
-    def __init__(
-        self,
-        node_weights: torch.Tensor,
-        ignore_nans: bool = False,
-        **kwargs,
-    ) -> None:
-        """Node- and feature weighted LogCosh Loss.
-
-        Parameters
-        ----------
-        node_weights : torch.Tensor of shape (N, )
-            Weight of each node in the loss function
-        ignore_nans : bool, optional
-            Allow nans in the loss and apply methods ignoring nans for measuring the loss, by default False
-
-        """
-        super().__init__(
-            node_weights=node_weights,
-            ignore_nans=ignore_nans,
-            **kwargs,
-        )
-
-    def forward(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        squash: bool = True,
-        scalar_indices: tuple[int, ...] | None = None,
-        without_scalars: list[str] | list[int] | None = None,
-        grid_shard_slice: slice | None = None,
-        group: ProcessGroup | None = None,
-    ) -> torch.Tensor:
-        """Calculates the lat-weighted LogCosh loss.
+    def calculate_difference(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Calculate the Log-cosh loss.
 
         Parameters
         ----------
@@ -84,24 +50,10 @@ class WeightedLogCoshLoss(BaseWeightedLoss):
             Prediction tensor, shape (bs, ensemble, lat*lon, n_outputs)
         target : torch.Tensor
             Target tensor, shape (bs, ensemble, lat*lon, n_outputs)
-        squash : bool, optional
-            Average last dimension, by default True
-        scalar_indices: tuple[int,...], optional
-            Indices to subset the calculated scalar with, by default None
-        without_scalars: list[str] | list[int] | None, optional
-            list of scalars to exclude from scaling. Can be list of names or dimensions to exclude.
-            By default None
-        grid_shard_slice: slice, optional
-            Slice of this gpus grid shard if sharded, by default None
-        group: ProcessGroup, optional
-            Distributed group, by default None
 
         Returns
         -------
         torch.Tensor
-            Weighted LogCosh loss
-
+            Log-cosh loss
         """
-        out = LogCosh.apply(pred - target)
-        out = self.scale(out, scalar_indices, without_scalars=without_scalars)
-        return self.scale_by_node_weights(out, squash, grid_shard_slice, group)
+        return LogCosh.apply(pred - target)

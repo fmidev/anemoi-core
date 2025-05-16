@@ -297,9 +297,11 @@ class AnemoiModelEncProcDec(nn.Module):
     def forward(
         self,
         x: Tensor,
+        *,
         model_comm_group: Optional[ProcessGroup] = None,
         grid_shard_slice: Optional[slice] = None,
         grid_shard_shapes: Optional[list] = None,
+        **kwargs,
     ) -> Tensor:
         """Forward pass of the model.
 

@@ -16,7 +16,7 @@ import einops
 import torch
 
 from anemoi.models.distributed.graph import reduce_tensor
-from anemoi.training.losses.weightedloss import BaseWeightedLoss
+from anemoi.training.losses.base import BaseLoss
 
 if TYPE_CHECKING:
     from torch.distributed.distributed_c10d import ProcessGroup
@@ -24,39 +24,41 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
-class KernelCRPS(BaseWeightedLoss):
-    """Area-weighted kernel CRPS loss."""
+class KernelCRPS(BaseLoss):
+    """Kernel CRPS loss."""
 
     def __init__(
         self,
-        node_weights: torch.Tensor,
         fair: bool = True,
         ignore_nans: bool = False,
         **kwargs,
     ) -> None:
         """Latitude- and (inverse-)variance-weighted kernel CRPS loss.
 
-        Args:
-        node_weights : torch.Tensor
-            Weights by area
-        fair: calculate a "fair" (unbiased) score - ensemble variance component weighted by (ens-size-1)^-1
+        Parameters
+        ----------
+        fair : bool
+            Calculate a "fair" (unbiased) score - ensemble variance component weighted by (ens-size-1)^-1.
         ignore_nans : bool, optional
             Allow nans in the loss and apply methods ignoring nans for measuring the loss, by default False
         """
-        super().__init__(node_weights=node_weights, ignore_nans=ignore_nans, **kwargs)
+        super().__init__(ignore_nans=ignore_nans, **kwargs)
 
         self.fair = fair
 
     def _kernel_crps(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Kernel (ensemble) CRPS.
 
-        Args:
-            preds: predicted ensemble, shape (batch_size, n_vars, latlon, ens_size)
-            targets: ground truth, shape (batch_size, n_vars, latlon)
+        Parameters
+        ----------
+        preds : torch.Tensor
+            Predicted ensemble, shape (batch_size, n_vars, latlon, ens_size)
+        targets : torch.Tensor
+            Ground truth, shape (batch_size, n_vars, latlon)
 
         Returns
         -------
-        kCRPS value
+        kCRPS : torch.Tensor
             The point-wise kernel CRPS, shape (batch_size, 1, latlon).
         """
         ens_size = preds.shape[-1]
@@ -79,9 +81,12 @@ class KernelCRPS(BaseWeightedLoss):
         y_target: torch.Tensor,
         squash: bool = True,
         *,
-        scalar_indices: tuple[int, ...] | None = None,
-        without_scalars: list[str] | list[int] | None = None,
+        scaler_indices: tuple[int, ...] | None = None,
+        without_scalers: list[str] | list[int] | None = None,
+        grid_shard_slice: slice | None = None,
+        group: ProcessGroup | None = None,
     ) -> torch.Tensor:
+        is_sharded = grid_shard_slice is not None
 
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e")
@@ -91,31 +96,29 @@ class KernelCRPS(BaseWeightedLoss):
 
         kcrps_ = einops.rearrange(kcrps_, "bs v latlon -> bs latlon v")
 
-        kcrps_ = self.scale(kcrps_, scalar_indices, without_scalars=without_scalars)
-        kcrps_ = kcrps_ * self.node_weights[:, None]
+        kcrps_ = self.scale(kcrps_.unsqueeze(1), scaler_indices, without_scalers=without_scalers, grid_shard_slice=grid_shard_slice)
 
-        # divide by (weighted point count) * (batch size)
-        npoints = torch.sum(self.node_weights)
+        # divide by batch size
         if squash:
-            return kcrps_.sum() / (npoints * bs_)
+            loss = kcrps_.sum() / bs_
+            return reduce_tensor(loss, group) if is_sharded else loss
+
         # sum only across the batch dimension; enable this to generate per-variable CRPS "maps"
         loss = kcrps_.sum(dim=0) / bs_
-        return loss.sum(dim=0) / self.node_weights.sum()
+        loss = loss.sum(dim=0)
+        return reduce_tensor(loss, group) if is_sharded else loss
 
     @property
     def name(self) -> str:
-
         f_str = "f" if self.fair else ""
-
         return f"{f_str}kcrps"
 
 
-class AlmostFairKernelCRPS(BaseWeightedLoss):
-    """Area-weighted almost fair kernel CRPS loss."""
+class AlmostFairKernelCRPS(BaseLoss):
+    """Almost fair kernel CRPS loss."""
 
     def __init__(
         self,
-        node_weights: torch.Tensor,
         alpha: float = 1.0,
         no_autocast: bool = True,
         ignore_nans: bool = False,
@@ -123,16 +126,17 @@ class AlmostFairKernelCRPS(BaseWeightedLoss):
     ) -> None:
         """Latitude- and (inverse-)variance-weighted kernel CRPS loss.
 
-        Args:
-        node_weights : torch.Tensor
-            Weights by area
-        alpha: factor for linear combination of fair (unbiased, ensemble variance component weighted by (ens-size-1)^-1)
+        Parameters
+        ----------
+        alpha : float
+            Factor for linear combination of fair (unbiased, ensemble variance component weighted by (ens-size-1)^-1)
             and standard CRPS (1.0 = fully fair, 0.0 = fully unfair)
-        no_autocast: deactivate autocast for the kernel CRPS calculation
+        no_autocast : bool, optional
+            Deactivate autocast for the kernel CRPS calculation
         ignore_nans : bool, optional
             Allow nans in the loss and apply methods ignoring nans for measuring the loss, by default False
         """
-        super().__init__(node_weights=node_weights, ignore_nans=ignore_nans, **kwargs)
+        super().__init__(ignore_nans=ignore_nans, **kwargs)
 
         self.alpha = alpha
         self.no_autocast = no_autocast
@@ -140,16 +144,19 @@ class AlmostFairKernelCRPS(BaseWeightedLoss):
     def _kernel_crps(self, preds: torch.Tensor, targets: torch.Tensor, alpha: float = 1.0) -> torch.Tensor:
         """Kernel (ensemble) CRPS.
 
-        Args:
-            preds: predicted ensemble, shape (batch_size, n_vars, latlon, ens_size)
-            targets: ground truth, shape (batch_size, n_vars, latlon)
-            alpha: factor for linear combination of fair
-                (unbiased, ensemble variance component weighted by (ens-size-1)^-1)
-                and standard CRPS (1.0 = fully fair, 0.0 = fully unfair)
+        Parameters
+        ----------
+        preds : torch.Tensor
+            Predicted ensemble, shape (batch_size, n_vars, latlon, ens_size)
+        targets : torch.Tensor
+            Ground truth, shape (batch_size, n_vars, latlon)
+        alpha : float
+            Factor for linear combination of fair (unbiased, ensemble variance component weighted by (ens-size-1)^-1)
+            and standard CRPS (1.0 = fully fair, 0.0 = fully unfair)
 
         Returns
         -------
-        kCRPS value
+        kCRPS : torch.Tensor
             The point-wise kernel CRPS, shape (batch_size, 1, latlon).
         """
         ens_size = preds.shape[-1]
@@ -178,11 +185,12 @@ class AlmostFairKernelCRPS(BaseWeightedLoss):
         y_target: torch.Tensor,
         squash: bool = True,
         *,
-        scalar_indices: tuple[int, ...] | None = None,
-        without_scalars: list[str] | list[int] | None = None,
+        scaler_indices: tuple[int, ...] | None = None,
+        without_scalers: list[str] | list[int] | None = None,
         grid_shard_slice: slice | None = None,
         group: ProcessGroup | None = None,
     ) -> torch.Tensor:
+        is_sharded = grid_shard_slice is not None
 
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e")
@@ -194,24 +202,18 @@ class AlmostFairKernelCRPS(BaseWeightedLoss):
         else:
             kcrps_ = self._kernel_crps(y_pred, y_target, alpha=self.alpha)
 
-        kcrps_ = einops.rearrange(kcrps_, "bs v latlon -> bs latlon v")
-
-        kcrps_ = self.scale(kcrps_, scalar_indices, without_scalars=without_scalars)
-
-        # Apply the (local) node weights
-        is_sharded = grid_shard_slice is not None
-        node_weights_local = self.node_weights[grid_shard_slice] if is_sharded else self.node_weights
-        kcrps_ = kcrps_ * node_weights_local[:, None]
+        # The ensemble member dimension is of course gone in the crps but scalers require 4 dimensions
+        kcrps_ = einops.rearrange(kcrps_, "bs v latlon -> bs latlon v").unsqueeze(1)
+        kcrps_ = self.scale(kcrps_, scaler_indices, without_scalers=without_scalers, grid_shard_slice=grid_shard_slice)
 
         # divide by (weighted point count) * (batch size)
-        npoints = torch.sum(self.node_weights)
         if squash:
-            loss = kcrps_.sum() / (npoints * bs_)
+            loss = kcrps_.sum() / bs_
             return reduce_tensor(loss, group) if is_sharded else loss
 
         # sum only across the batch dimension; enable this to generate per-variable CRPS "maps"
         loss = kcrps_.sum(dim=0) / bs_
-        loss = loss.sum(dim=0) / self.node_weights.sum()
+        loss = loss.sum(dim=0)
         return reduce_tensor(loss, group) if is_sharded else loss
 
     @property
