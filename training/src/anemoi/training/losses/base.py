@@ -146,6 +146,8 @@ class BaseLoss(nn.Module, ABC):
         *,
         scaler_indices: tuple[int, ...] | None = None,
         without_scalers: list[str] | list[int] | None = None,
+        grid_shard_slice: slice | None = None,
+        group: ProcessGroup | None = None,
     ) -> torch.Tensor:
         """Calculates the lat-weighted scaled loss.
 
@@ -162,6 +164,10 @@ class BaseLoss(nn.Module, ABC):
         without_scalers: list[str] | list[int] | None, optional
             list of scalers to exclude from scaling. Can be list of names or dimensions to exclude.
             By default None
+        grid_shard_slice : slice, optional
+            Slice of the grid if x comes sharded, by default None
+        group: ProcessGroup, optional
+            Distributed group to reduce over, by default None
 
         Returns
         -------

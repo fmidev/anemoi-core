@@ -185,15 +185,34 @@ class AnemoiModelEncProcDec(nn.Module):
         x_skip = x[:, -1, ...]
         if self.A_down is not None or self.A_up is not None:
             x_skip = einops.rearrange(x_skip, "batch ensemble grid vars -> (batch ensemble) grid vars")
+            grid_shard_size = x_skip.shape[1]
             # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
             # hence we check that they are on the correct device ; copy should only happen in the first forward run
             if self.A_down is not None:
-                if grid_shard_slice is not None:
-                    self.A_down = self._make
-                self.A_down = self.A_down.to(x_skip.device)
+                if (
+                    self.A_down.shape[-1] != grid_shard_size
+                ):  # reload truncation matrix for correct shard slice, this should happen only once
+                    LOGGER.info(f"Reloading truncation matrix for shard slice {grid_shard_slice}")
+                    truncation_data = (
+                        self._truncation_data["down"]
+                        if grid_shard_slice is None
+                        else self._truncation_data["down"][:, grid_shard_slice]
+                    )
+                    self.A_down = self._make_truncation_matrix(truncation_data)
+                self.A_down = self.A_down.to(x.device)
                 x_skip = self._truncate_fields(x_skip, self.A_down)  # to coarse resolution
             if self.A_up is not None:
-                self.A_up = self.A_up.to(x_skip.device)
+                if (
+                    self.A_up.shape[0] != grid_shard_size
+                ):  # reload truncation matrix for correct shard slice, this should happen only once
+                    LOGGER.info(f"Reloading truncation matrix for shard slice {grid_shard_slice}")
+                    truncation_data = (
+                        self._truncation_data["up"]
+                        if grid_shard_slice is None
+                        else self._truncation_data["up"][grid_shard_slice, :]
+                    )
+                    self.A_up = self._make_truncation_matrix(truncation_data)
+                self.A_up = self.A_up.to(x.device)
                 x_skip = self._truncate_fields(x_skip, self.A_up)  # back to high resolution
             x_skip = einops.rearrange(
                 x_skip, "(batch ensemble) grid vars -> batch ensemble grid vars", batch=batch_size
