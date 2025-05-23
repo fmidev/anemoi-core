@@ -168,6 +168,12 @@ class AnemoiModelEncProcDec(nn.Module):
                     out.append(self._multiply_sparse(x[i, ...], A))
         return torch.stack(out)
 
+    def _get_shard_shapes(self, x, dim=0, model_comm_group=None, shard_shapes_dim=None):
+        if shard_shapes_dim is None:
+            return get_shard_shapes(x, dim, model_comm_group)
+        else:
+            return apply_shard_shapes(x, dim, shard_shapes_dim)
+
     def _assemble_input(self, x, batch_size, grid_shard_slice=None, grid_shard_shapes=None, model_comm_group=None):
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=batch_size)
         if grid_shard_slice is not None:
@@ -183,18 +189,16 @@ class AnemoiModelEncProcDec(nn.Module):
             ),
             dim=-1,  # feature dimension
         )
+        shard_shapes_data = self._get_shard_shapes(x_data_latent, 0, model_comm_group, grid_shard_shapes)
 
         x_skip = x[:, -1, ...]
         if self.A_down is not None or self.A_up is not None:
-            # we also do the grid_shard_shapes in forward... are we doing it twice now? factor this out as a function?
-            if grid_shard_shapes is None:
-                shard_shapes_data = get_shard_shapes(x_data_latent, 0, model_comm_group)
-            else:  # use the provided shard shapes to generalize to all dimensions
-                shard_shapes_data = apply_shard_shapes(x_data_latent, 0, grid_shard_shapes)
-            shard_shapes_channels = get_shard_shapes(
-                x_skip, -1, model_comm_group
-            )  # only channel dimension will be used
-            x_skip = shard_channels(x_skip, shard_shapes_data, model_comm_group)  # we get the full sequence here
+            # for grid-sharded inputs we need to reshard to channel-sharded to apply truncation
+            if grid_shard_slice is not None:
+                shard_shapes_channels = [  # save channel shapes for later
+                    shapes[-1] for shapes in get_shard_shapes(x_skip, -1, model_comm_group)
+                ]
+                x_skip = shard_channels(x_skip, shard_shapes_data, model_comm_group)  # we get the full sequence here
             x_skip = einops.rearrange(x_skip, "batch ensemble grid vars -> (batch ensemble) grid vars")
 
             # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
@@ -209,8 +213,14 @@ class AnemoiModelEncProcDec(nn.Module):
             x_skip = einops.rearrange(
                 x_skip, "(batch ensemble) grid vars -> batch ensemble grid vars", batch=batch_size
             )
-            x_skip = gather_channels(x_skip, shard_shapes_channels, model_comm_group)  # ful channels, split sequence
-        return x_data_latent, x_skip
+            # back to grid-sharding if needed
+            if grid_shard_slice is not None:
+                shard_shapes_channels = apply_shard_shapes(x_skip, -1, shard_shapes_channels)  # get full shapes
+                x_skip = gather_channels(
+                    x_skip, shard_shapes_channels, model_comm_group
+                )  # full channels, split sequence
+
+        return x_data_latent, x_skip, shard_shapes_data
 
     def _assemble_output(self, x_out, x_skip, batch_size, ensemble_size, dtype):
         x_out = (
@@ -336,15 +346,11 @@ class AnemoiModelEncProcDec(nn.Module):
         ensemble_size = x.shape[2]
         in_out_sharded = grid_shard_slice is not None
 
-        x_data_latent, x_skip = self._assemble_input(
+        x_data_latent, x_skip, shard_shapes_data = self._assemble_input(
             x, batch_size, grid_shard_slice, grid_shard_shapes, model_comm_group
         )
-        x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
 
-        if grid_shard_shapes is None:
-            shard_shapes_data = get_shard_shapes(x_data_latent, 0, model_comm_group)
-        else:  # use the provided shard shapes to generalize to all dimensions
-            shard_shapes_data = apply_shard_shapes(x_data_latent, 0, grid_shard_shapes)
+        x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
         shard_shapes_hidden = get_shard_shapes(x_hidden_latent, 0, model_comm_group)
 
         x_data_latent, x_latent = self._run_mapper(
