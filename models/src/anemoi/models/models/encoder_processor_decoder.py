@@ -21,6 +21,8 @@ from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
+from anemoi.models.distributed.graph import gather_channels
+from anemoi.models.distributed.graph import shard_channels
 from anemoi.models.distributed.shapes import apply_shard_shapes
 from anemoi.models.distributed.shapes import get_shard_shapes
 from anemoi.models.layers.graph import NamedNodesAttributes
@@ -166,7 +168,7 @@ class AnemoiModelEncProcDec(nn.Module):
                     out.append(self._multiply_sparse(x[i, ...], A))
         return torch.stack(out)
 
-    def _assemble_input(self, x, batch_size, grid_shard_slice=None):
+    def _assemble_input(self, x, batch_size, grid_shard_slice=None, grid_shard_shapes=None, model_comm_group=None):
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=batch_size)
         if grid_shard_slice is not None:
             node_attributes_data = node_attributes_data[
@@ -184,40 +186,30 @@ class AnemoiModelEncProcDec(nn.Module):
 
         x_skip = x[:, -1, ...]
         if self.A_down is not None or self.A_up is not None:
+            # we also do the grid_shard_shapes in forward... are we doing it twice now? factor this out as a function?
+            if grid_shard_shapes is None:
+                shard_shapes_data = get_shard_shapes(x_data_latent, 0, model_comm_group)
+            else:  # use the provided shard shapes to generalize to all dimensions
+                shard_shapes_data = apply_shard_shapes(x_data_latent, 0, grid_shard_shapes)
+            shard_shapes_channels = get_shard_shapes(
+                x_skip, -1, model_comm_group
+            )  # only channel dimension will be used
+            x_skip = shard_channels(x_skip, shard_shapes_data, model_comm_group)  # we get the full sequence here
             x_skip = einops.rearrange(x_skip, "batch ensemble grid vars -> (batch ensemble) grid vars")
-            grid_shard_size = x_skip.shape[1]
+
             # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
             # hence we check that they are on the correct device ; copy should only happen in the first forward run
             if self.A_down is not None:
-                if (
-                    self.A_down.shape[-1] != grid_shard_size
-                ):  # reload truncation matrix for correct shard slice, this should happen only once
-                    LOGGER.info(f"Reloading truncation matrix for shard slice {grid_shard_slice}")
-                    truncation_data = (
-                        self._truncation_data["down"]
-                        if grid_shard_slice is None
-                        else self._truncation_data["down"][:, grid_shard_slice]
-                    )
-                    self.A_down = self._make_truncation_matrix(truncation_data)
-                self.A_down = self.A_down.to(x.device)
+                self.A_down = self.A_down.to(x_skip.device)
                 x_skip = self._truncate_fields(x_skip, self.A_down)  # to coarse resolution
             if self.A_up is not None:
-                if (
-                    self.A_up.shape[0] != grid_shard_size
-                ):  # reload truncation matrix for correct shard slice, this should happen only once
-                    LOGGER.info(f"Reloading truncation matrix for shard slice {grid_shard_slice}")
-                    truncation_data = (
-                        self._truncation_data["up"]
-                        if grid_shard_slice is None
-                        else self._truncation_data["up"][grid_shard_slice, :]
-                    )
-                    self.A_up = self._make_truncation_matrix(truncation_data)
-                self.A_up = self.A_up.to(x.device)
+                self.A_up = self.A_up.to(x_skip.device)
                 x_skip = self._truncate_fields(x_skip, self.A_up)  # back to high resolution
+
             x_skip = einops.rearrange(
                 x_skip, "(batch ensemble) grid vars -> batch ensemble grid vars", batch=batch_size
             )
-
+            x_skip = gather_channels(x_skip, shard_shapes_channels, model_comm_group)  # ful channels, split sequence
         return x_data_latent, x_skip
 
     def _assemble_output(self, x_out, x_skip, batch_size, ensemble_size, dtype):
@@ -344,7 +336,9 @@ class AnemoiModelEncProcDec(nn.Module):
         ensemble_size = x.shape[2]
         in_out_sharded = grid_shard_slice is not None
 
-        x_data_latent, x_skip = self._assemble_input(x, batch_size, grid_shard_slice)
+        x_data_latent, x_skip = self._assemble_input(
+            x, batch_size, grid_shard_slice, grid_shard_shapes, model_comm_group
+        )
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
 
         if grid_shard_shapes is None:
