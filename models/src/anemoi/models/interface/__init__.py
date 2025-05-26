@@ -145,9 +145,13 @@ class AnemoiModelInterface(torch.nn.Module):
 
             if gather_out and model_comm_group is not None:
                 if torch.distributed.get_rank() == 0:
-                    gather_list = [torch.zeros_like(y_hat) for _ in range(model_comm_group.size())]
+                    gather_list = [torch.empty_like(y_hat) for _ in range(model_comm_group.size())]
                 else:
                     gather_list = None
-                y_hat = gather(y_hat, gather_list, dst=0, group=model_comm_group)
+                gather(y_hat, gather_list, dst=0, group=model_comm_group)
+                if torch.distributed.get_rank() == 0:
+                    y_hat = torch.cat(gather_list, dim=-2)
+                else:
+                    y_hat = None
 
         return y_hat
