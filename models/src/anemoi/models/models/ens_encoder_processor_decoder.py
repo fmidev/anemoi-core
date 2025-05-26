@@ -17,7 +17,7 @@ from hydra.utils import instantiate
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch_geometric.data import HeteroData
 
-from anemoi.models.distributed.shapes import apply_shard_shapes
+from anemoi.models.distributed.graph import shard_tensor
 from anemoi.models.distributed.shapes import get_shard_shapes
 from anemoi.models.layers.utils import load_layer_kernels
 from anemoi.models.models import AnemoiModelEncProcDec
@@ -59,46 +59,17 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         input_dim += 1
         return input_dim
 
-    def _assemble_input(self, x, fcstep, bse, grid_shard_slice=None):
+    def _assemble_input(self, x, fcstep, bse, grid_shard_shapes=None, model_comm_group=None):
         x_skip = x[:, -1, :, :, self._internal_input_idx]
         x_skip = einops.rearrange(x_skip, "batch ensemble grid vars -> (batch ensemble) grid vars")
-        grid_shard_size = x_skip.shape[1]
-
-        # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
-        # hence we check that they are on the correct device ; copy should only happen in the first forward run
-        # todo -> parallelize this
-        if self.A_down is not None:
-            if (
-                self.A_down.shape[-1] != grid_shard_size
-            ):  # reload truncation matrix for correct shard slice, this should happen only once
-                LOGGER.info(f"Reloading truncation matrix for shard slice {grid_shard_slice}")
-                truncation_data = (
-                    self._truncation_data["down"]
-                    if grid_shard_slice is None
-                    else self._truncation_data["down"][:, grid_shard_slice]
-                )
-                self.A_down = self._make_truncation_matrix(truncation_data)
-            self.A_down = self.A_down.to(x.device)
-            x_skip = self._truncate_fields(x_skip, self.A_down)  # to coarse resolution
-        if self.A_up is not None:
-            if (
-                self.A_up.shape[0] != grid_shard_size
-            ):  # reload truncation matrix for correct shard slice, this should happen only once
-                LOGGER.info(f"Reloading truncation matrix for shard slice {grid_shard_slice}")
-                truncation_data = (
-                    self._truncation_data["up"]
-                    if grid_shard_slice is None
-                    else self._truncation_data["up"][grid_shard_slice, :]
-                )
-                self.A_up = self._make_truncation_matrix(truncation_data)
-            self.A_up = self.A_up.to(x.device)
-            x_skip = self._truncate_fields(x_skip, self.A_up)  # back to high resolution
+        x_skip = self._apply_truncation(x_skip, grid_shard_shapes, model_comm_group)
 
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=bse)
-        if grid_shard_slice is not None:
-            node_attributes_data = node_attributes_data[
-                grid_shard_slice, :
-            ]  # TODO(Jan): shard_tensor instead for gradient ?
+        if grid_shard_shapes is not None:
+            # select grid_shard_slice of node_attributes but with proper gradient propagation in bwd
+            # the fwd pass is equivalent to node_attributes_data = node_attributes_data[grid_shard_slice, ...]
+            shard_shapes_nodes = self._get_shard_shapes(node_attributes_data, 0, grid_shard_shapes, model_comm_group)
+            node_attributes_data = shard_tensor(node_attributes_data, 0, shard_shapes_nodes, model_comm_group)
 
         # add data positional info (lat/lon)
         x_data_latent = torch.cat(
@@ -113,8 +84,9 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             (x_data_latent, torch.ones(x_data_latent.shape[:-1], device=x_data_latent.device).unsqueeze(-1) * fcstep),
             dim=-1,
         )
+        shard_shapes_data = self._get_shard_shapes(x_data_latent, 0, grid_shard_shapes, model_comm_group)
 
-        return x_data_latent, x_skip
+        return x_data_latent, x_skip, shard_shapes_data
 
     def _assemble_output(self, x_out, x_skip, batch_size, bse, dtype):
         x_out = einops.rearrange(x_out, "(bse n) f -> bse n f", bse=bse)
@@ -138,7 +110,6 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         *,
         fcstep: int,
         model_comm_group: Optional[ProcessGroup] = None,
-        grid_shard_slice: Optional[slice] = None,
         grid_shard_shapes: Optional[tuple] = None,
         **kwargs,
     ) -> torch.Tensor:
@@ -151,8 +122,6 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 Forecast step
             model_comm_group: Optional[ProcessGroup], optional
                 Model communication group
-            grid_shard_slice : slice, optional
-                Slice of the grid if x comes sharded, by default None
             grid_shard_shapes : list, optional
                 Shard shapes of the grid, by default None
         Returns:
@@ -160,17 +129,18 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         """
         batch_size, ensemble_size = x.shape[0], x.shape[2]
         bse = batch_size * ensemble_size  # batch and ensemble dimensions are merged
-        in_out_sharded = grid_shard_slice is not None
+        in_out_sharded = grid_shard_shapes is not None
+
+        assert not (
+            in_out_sharded and model_comm_group is None
+        ), "If input is sharded, model_comm_group must be provided."
 
         fcstep = min(1, fcstep)
 
-        x_data_latent, x_skip = self._assemble_input(x, fcstep, bse, grid_shard_slice=grid_shard_slice)
+        x_data_latent, x_skip, shard_shapes_data = self._assemble_input(
+            x, fcstep, bse, grid_shard_shapes, model_comm_group
+        )
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=bse)
-
-        if grid_shard_shapes is None:
-            shard_shapes_data = get_shard_shapes(x_data_latent, 0, model_comm_group)
-        else:
-            shard_shapes_data = apply_shard_shapes(x_data_latent, 0, grid_shard_shapes)
         shard_shapes_hidden = get_shard_shapes(x_hidden_latent, 0, model_comm_group)
 
         x_data_latent, x_latent = self._run_mapper(

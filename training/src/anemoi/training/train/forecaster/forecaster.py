@@ -218,7 +218,6 @@ class GraphForecaster(pl.LightningModule):
         return self.model(
             x,
             model_comm_group=self.model_comm_group,
-            grid_shard_slice=self.grid_shard_slice,
             grid_shard_shapes=self.grid_shard_shapes,
         )
 
@@ -298,7 +297,7 @@ class GraphForecaster(pl.LightningModule):
         sharding_supported = (self.loss_supports_sharding or not training_mode) and (
             self.metrics_support_sharding or not validation_mode
         )
-        if is_sharded and not sharding_supported:  # gather tensors if loss and metrics do not support sharding
+        if is_sharded and not sharding_supported:  # gather tensors if loss or metrics do not support sharding
             shard_shapes = apply_shard_shapes(y_pred, self.grid_dim, self.grid_shard_shapes)
             y_pred_full = gather_tensor(torch.clone(y_pred), self.grid_dim, shard_shapes, self.model_comm_group)
             y_full = gather_tensor(torch.clone(y), self.grid_dim, shard_shapes, self.model_comm_group)
@@ -401,7 +400,7 @@ class GraphForecaster(pl.LightningModule):
 
             yield loss, metrics_next, y_pred
 
-    def on_after_batch_transfer(self, batch: torch.Tensor, dataloader_idx: int) -> torch.Tensor:
+    def on_after_batch_transfer(self, batch: torch.Tensor, _: int) -> torch.Tensor:
         """Assemble batch after transfer to GPU by gathering the batch shards if needed.
 
         Parameters
@@ -526,6 +525,8 @@ class GraphForecaster(pl.LightningModule):
                     y_pred_postprocessed,
                     y_postprocessed,
                     scaler_indices=[..., indices],
+                    grid_shard_slice=grid_shard_slice,
+                    group=self.model_comm_group,
                 )
 
         return metrics

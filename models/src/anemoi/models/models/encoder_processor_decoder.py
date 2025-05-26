@@ -23,6 +23,7 @@ from torch_geometric.data import HeteroData
 
 from anemoi.models.distributed.graph import gather_channels
 from anemoi.models.distributed.graph import shard_channels
+from anemoi.models.distributed.graph import shard_tensor
 from anemoi.models.distributed.shapes import apply_shard_shapes
 from anemoi.models.distributed.shapes import get_shard_shapes
 from anemoi.models.layers.graph import NamedNodesAttributes
@@ -168,18 +169,51 @@ class AnemoiModelEncProcDec(nn.Module):
                     out.append(self._multiply_sparse(x[i, ...], A))
         return torch.stack(out)
 
-    def _get_shard_shapes(self, x, dim=0, model_comm_group=None, shard_shapes_dim=None):
+    def _get_shard_shapes(self, x, dim=0, shard_shapes_dim=None, model_comm_group=None):
         if shard_shapes_dim is None:
             return get_shard_shapes(x, dim, model_comm_group)
         else:
             return apply_shard_shapes(x, dim, shard_shapes_dim)
 
-    def _assemble_input(self, x, batch_size, grid_shard_slice=None, grid_shard_shapes=None, model_comm_group=None):
+    def _apply_truncation(self, x, grid_shard_shapes=None, model_comm_group=None):
+        if self.A_down is not None or self.A_up is not None:
+            if grid_shard_shapes is not None:
+                shard_shapes = self._get_shard_shapes(x, 0, grid_shard_shapes, model_comm_group)
+                shard_shapes_channels = [  # save shard shapes for channels:
+                    shapes[-1] for shapes in get_shard_shapes(x, -1, model_comm_group)
+                ]
+                # grid-sharded input: reshard to channel-shards to apply truncation
+                x = shard_channels(x, shard_shapes, model_comm_group)  # we get the full sequence here
+
+            # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
+            # hence we check that they are on the correct device ; copy should only happen in the first forward run
+            if self.A_down is not None:
+                self.A_down = self.A_down.to(x.device)
+                x = self._truncate_fields(x, self.A_down)  # to coarse resolution
+            if self.A_up is not None:
+                self.A_up = self.A_up.to(x.device)
+                x = self._truncate_fields(x, self.A_up)  # back to high resolution
+
+            if grid_shard_shapes is not None:
+                # back to grid-sharding as before
+                shard_shapes_channels = self._get_shard_shapes(x, -1, shard_shapes_channels, model_comm_group)
+                x = gather_channels(x, shard_shapes_channels, model_comm_group)
+
+        return x
+
+    def _assemble_input(self, x, batch_size, grid_shard_shapes=None, model_comm_group=None):
+        x_skip = x[:, -1, ...]
+        x_skip = einops.rearrange(x_skip, "batch ensemble grid vars -> (batch ensemble) grid vars")
+        x_skip = self._apply_truncation(x_skip, grid_shard_shapes, model_comm_group)
+        x_skip = einops.rearrange(x_skip, "(batch ensemble) grid vars -> batch ensemble grid vars", batch=batch_size)
+
+        # concatenate input data and node attributes
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=batch_size)
-        if grid_shard_slice is not None:
-            node_attributes_data = node_attributes_data[
-                grid_shard_slice, :
-            ]  # TODO(Jan): shard_tensor instead for gradient ?
+        if grid_shard_shapes is not None:
+            # select grid_shard_slice of node_attributes but with proper gradient propagation in bwd
+            # the fwd pass is equivalent to node_attributes_data = node_attributes_data[grid_shard_slice, ...]
+            shard_shapes_nodes = self._get_shard_shapes(node_attributes_data, 0, grid_shard_shapes, model_comm_group)
+            node_attributes_data = shard_tensor(node_attributes_data, 0, shard_shapes_nodes, model_comm_group)
 
         # normalize and add data positional info (lat/lon)
         x_data_latent = torch.cat(
@@ -189,36 +223,7 @@ class AnemoiModelEncProcDec(nn.Module):
             ),
             dim=-1,  # feature dimension
         )
-        shard_shapes_data = self._get_shard_shapes(x_data_latent, 0, model_comm_group, grid_shard_shapes)
-
-        x_skip = x[:, -1, ...]
-        if self.A_down is not None or self.A_up is not None:
-            # for grid-sharded inputs we need to reshard to channel-sharded to apply truncation
-            if grid_shard_slice is not None:
-                shard_shapes_channels = [  # save channel shapes for later
-                    shapes[-1] for shapes in get_shard_shapes(x_skip, -1, model_comm_group)
-                ]
-                x_skip = shard_channels(x_skip, shard_shapes_data, model_comm_group)  # we get the full sequence here
-            x_skip = einops.rearrange(x_skip, "batch ensemble grid vars -> (batch ensemble) grid vars")
-
-            # these can't be registered as buffers because ddp does not like to broadcast sparse tensors
-            # hence we check that they are on the correct device ; copy should only happen in the first forward run
-            if self.A_down is not None:
-                self.A_down = self.A_down.to(x_skip.device)
-                x_skip = self._truncate_fields(x_skip, self.A_down)  # to coarse resolution
-            if self.A_up is not None:
-                self.A_up = self.A_up.to(x_skip.device)
-                x_skip = self._truncate_fields(x_skip, self.A_up)  # back to high resolution
-
-            x_skip = einops.rearrange(
-                x_skip, "(batch ensemble) grid vars -> batch ensemble grid vars", batch=batch_size
-            )
-            # back to grid-sharding if needed
-            if grid_shard_slice is not None:
-                shard_shapes_channels = apply_shard_shapes(x_skip, -1, shard_shapes_channels)  # get full shapes
-                x_skip = gather_channels(
-                    x_skip, shard_shapes_channels, model_comm_group
-                )  # full channels, split sequence
+        shard_shapes_data = self._get_shard_shapes(x_data_latent, 0, grid_shard_shapes, model_comm_group)
 
         return x_data_latent, x_skip, shard_shapes_data
 
@@ -320,7 +325,6 @@ class AnemoiModelEncProcDec(nn.Module):
         x: Tensor,
         *,
         model_comm_group: Optional[ProcessGroup] = None,
-        grid_shard_slice: Optional[slice] = None,
         grid_shard_shapes: Optional[list] = None,
         **kwargs,
     ) -> Tensor:
@@ -332,8 +336,6 @@ class AnemoiModelEncProcDec(nn.Module):
             Input data
         model_comm_group : Optional[ProcessGroup], optional
             Model communication group, by default None
-        grid_shard_slice : slice, optional
-            Slice of the grid if x comes sharded, by default None
         grid_shard_shapes : list, optional
             Shard shapes of the grid, by default None
 
@@ -344,10 +346,14 @@ class AnemoiModelEncProcDec(nn.Module):
         """
         batch_size = x.shape[0]
         ensemble_size = x.shape[2]
-        in_out_sharded = grid_shard_slice is not None
+        in_out_sharded = grid_shard_shapes is not None
+
+        assert not (
+            in_out_sharded and (grid_shard_shapes is None or model_comm_group is None)
+        ), "If input is sharded, grid_shard_shapes and model_comm_group must be provided."
 
         x_data_latent, x_skip, shard_shapes_data = self._assemble_input(
-            x, batch_size, grid_shard_slice, grid_shard_shapes, model_comm_group
+            x, batch_size, grid_shard_shapes, model_comm_group
         )
 
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)

@@ -110,7 +110,6 @@ class GraphEnsForecaster(GraphForecaster):
             x,
             fcstep=fcstep,
             model_comm_group=self.model_comm_group,
-            grid_shard_slice=self.grid_shard_slice,
             grid_shard_shapes=self.grid_shard_shapes,
         )
 
@@ -147,9 +146,8 @@ class GraphEnsForecaster(GraphForecaster):
         y_pred: torch.Tensor,
         y: torch.Tensor,
         loss: torch.nn.Module,
-        nens_per_device: int,
         ens_comm_group_size: int,
-        ens_comm_group: ProcessGroup,
+        ens_comm_subgroup: ProcessGroup,
         model_comm_group: ProcessGroup,
         return_pred_ens: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
@@ -164,14 +162,12 @@ class GraphEnsForecaster(GraphForecaster):
                 Ground truth
             loss: torch.nn.Module
                 Loss function
-            nens_per_device: int
-                Number of ensemble members per device
             ens_comm_group_size: int
-                Size of ensemble communication group
-            ens_comm_group: int
-                Process ensemble group
-            model_comm_group: int
-                Process model group
+                Size of the ensemble communication group
+            ens_comm_subgroup: ProcessGroup
+                Ensemble communication subgroup
+            model_comm_group: ProcessGroup
+                Model communication group
             return_pred_ens: bool
                 Validation flag: if True, we return the predicted ensemble (post-gather)
 
@@ -188,7 +184,7 @@ class GraphEnsForecaster(GraphForecaster):
             y_pred.clone(),  # for bwd because we checkpoint this region
             dim=1,
             shapes=[y_pred.shape] * ens_comm_group_size,
-            mgroup=self.ens_comm_subgroup,
+            mgroup=ens_comm_subgroup,
         )
 
         # compute the loss
@@ -277,7 +273,6 @@ class GraphEnsForecaster(GraphForecaster):
                     y_pred,
                     y,
                     self.loss,
-                    self.nens_per_device,
                     self.ens_comm_subgroup_size,
                     self.ens_comm_subgroup,
                     self.model_comm_group,
