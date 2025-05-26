@@ -141,6 +141,8 @@ class AnemoiModelInterface(torch.nn.Module):
 
             y_hat = self(x, model_comm_group=model_comm_group, grid_shard_shapes=grid_shard_shapes, **kwargs)
 
+            y_hat = self.post_processors(y_hat, in_place=False)
+
             if gather_out and model_comm_group is not None:
                 if torch.distributed.get_rank() == 0:
                     gather_list = [torch.zeros_like(y_hat) for _ in range(model_comm_group.size())]
@@ -148,4 +150,4 @@ class AnemoiModelInterface(torch.nn.Module):
                     gather_list = None
                 y_hat = gather(y_hat, gather_list, dst=0, group=model_comm_group)
 
-        return self.post_processors(y_hat, in_place=False)
+        return y_hat
