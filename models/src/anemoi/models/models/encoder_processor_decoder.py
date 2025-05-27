@@ -157,16 +157,13 @@ class AnemoiModelEncProcDec(nn.Module):
     def _multiply_sparse(self, x, A):
         return torch.sparse.mm(A, x)
 
-    def _truncate_fields(self, x, A, batch_size=None, grad_checkpoint=False):
+    def _truncate_fields(self, x, A, batch_size=None, auto_cast=False):
         if not batch_size:
             batch_size = x.shape[0]
         out = []
-        with torch.amp.autocast(device_type="cuda", enabled=False):
+        with torch.amp.autocast(device_type="cuda", enabled=auto_cast):
             for i in range(batch_size):
-                if grad_checkpoint:
-                    out.append(torch.utils.checkpoint(self.multiply_sparse, x[i, ...], A, use_reentrant=False))
-                else:
-                    out.append(self._multiply_sparse(x[i, ...], A))
+                out.append(self._multiply_sparse(x[i, ...], A))
         return torch.stack(out)
 
     def _get_shard_shapes(self, x, dim=0, shard_shapes_dim=None, model_comm_group=None):
@@ -352,6 +349,7 @@ class AnemoiModelEncProcDec(nn.Module):
             in_out_sharded and (grid_shard_shapes is None or model_comm_group is None)
         ), "If input is sharded, grid_shard_shapes and model_comm_group must be provided."
 
+        # SL, todo: check if we need a act. checkpoint here
         x_data_latent, x_skip, shard_shapes_data = self._assemble_input(
             x, batch_size, grid_shard_shapes, model_comm_group
         )
