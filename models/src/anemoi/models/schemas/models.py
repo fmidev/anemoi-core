@@ -164,8 +164,6 @@ class BaseModelSchema(PydanticBaseModel):
     "Keep the input batch and the output of the model sharded"
     model: Model = Field(default_factory=Model)
     "Model schema."
-    layer_kernels: Union[dict[str, dict], None] = Field(default_factory=dict)
-    "Settings related to custom kernels for encoder processor and decoder blocks"
     trainable_parameters: TrainableParameters = Field(default_factory=TrainableParameters)
     "Learnable node and edge parameters."
     bounding: list[Bounding]
