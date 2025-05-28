@@ -878,9 +878,14 @@ class TransformerBaseMapper(BaseMapper):
         batch_size: int,
         shard_shapes: tuple[tuple[int], tuple[int]],
         model_comm_group: Optional[ProcessGroup] = None,
+        x_src_is_sharded: bool = False,
+        x_dst_is_sharded: bool = False,
+        keep_x_dst_sharded: bool = False,
     ) -> PairTensor:
 
-        x_src, x_dst, shapes_src, shapes_dst = self.pre_process(x, shard_shapes, model_comm_group)
+        x_src, x_dst, shapes_src, shapes_dst = self.pre_process(
+            x, shard_shapes, model_comm_group, x_src_is_sharded, x_dst_is_sharded
+        )
 
         (x_src, x_dst), _ = self.proc(
             (x_src, x_dst),
@@ -889,7 +894,7 @@ class TransformerBaseMapper(BaseMapper):
             model_comm_group,
         )
 
-        x_dst = self.post_process(x_dst, shapes_dst, model_comm_group)
+        x_dst = self.post_process(x_dst, shapes_dst, model_comm_group, keep_x_dst_sharded=keep_x_dst_sharded)
 
         return x_dst
 
@@ -969,8 +974,13 @@ class TransformerForwardMapper(ForwardMapperPreProcessMixin, TransformerBaseMapp
         batch_size: int,
         shard_shapes: tuple[tuple[int], tuple[int], tuple[int], tuple[int]],
         model_comm_group: Optional[ProcessGroup] = None,
+        x_src_is_sharded: bool = False,
+        x_dst_is_sharded: bool = False,
+        keep_x_dst_sharded: bool = False,
     ) -> PairTensor:
-        x_dst = super().forward(x, batch_size, shard_shapes, model_comm_group)
+        x_dst = super().forward(
+            x, batch_size, shard_shapes, model_comm_group, x_src_is_sharded, x_dst_is_sharded, keep_x_dst_sharded
+        )
         return x[0], x_dst
 
 
@@ -1045,10 +1055,13 @@ class TransformerBackwardMapper(BackwardMapperPostProcessMixin, TransformerBaseM
             nn.LayerNorm(self.hidden_dim), nn.Linear(self.hidden_dim, self.out_channels_dst)
         )
 
-    def pre_process(self, x, shard_shapes, model_comm_group=None):
-        x_src, x_dst, shapes_src, shapes_dst = super().pre_process(x, shard_shapes, model_comm_group)
+    def pre_process(self, x, shard_shapes, model_comm_group=None, x_src_is_sharded=False, x_dst_is_sharded=False):
+        x_src, x_dst, shapes_src, shapes_dst = super().pre_process(
+            x, shard_shapes, model_comm_group, x_src_is_sharded, x_dst_is_sharded
+        )
         shapes_src = change_channels_in_shape(shapes_src, self.hidden_dim)
-        x_dst = shard_tensor(x_dst, 0, shapes_dst, model_comm_group)
+        if not x_dst_is_sharded:
+            x_dst = shard_tensor(x_dst, 0, shapes_dst, model_comm_group)
         x_dst = self.emb_nodes_dst(x_dst)
         shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
         return x_src, x_dst, shapes_src, shapes_dst
