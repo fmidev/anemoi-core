@@ -12,7 +12,7 @@ from typing import Optional
 
 import torch
 from hydra.utils import instantiate
-from torch.distributed import gather
+from torch.distributed import all_gather
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch_geometric.data import HeteroData
 
@@ -144,14 +144,8 @@ class AnemoiModelInterface(torch.nn.Module):
             y_hat = self.post_processors(y_hat, in_place=False)
 
             if gather_out and model_comm_group is not None:
-                if torch.distributed.get_rank() == 0:
-                    gather_list = [torch.empty_like(y_hat) for _ in range(model_comm_group.size())]
-                else:
-                    gather_list = None
-                gather(y_hat, gather_list, dst=0, group=model_comm_group)
-                if torch.distributed.get_rank() == 0:
-                    y_hat = torch.cat(gather_list, dim=-2)
-                else:
-                    y_hat = None
+                gather_list = [torch.empty_like(y_hat) for _ in range(model_comm_group.size())]
+                all_gather(gather_list, y_hat, group=model_comm_group)
+                y_hat = torch.cat(gather_list, dim=-2)
 
         return y_hat
