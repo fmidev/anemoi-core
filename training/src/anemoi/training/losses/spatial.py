@@ -15,7 +15,7 @@ import logging
 import torch
 import torch.fft
 
-from anemoi.training.losses.weightedloss import FunctionalWeightedLoss
+from anemoi.training.losses.base import FunctionalLoss
 
 LOGGER = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def log_rfft2_distance(fake_output: torch.Tensor, real_output: torch.Tensor, dim
     return torch.sqrt(torch.mean(log_10)) / 10
 
 
-class LogFFT2Distance(FunctionalWeightedLoss):
+class LogFFT2Distance(FunctionalLoss):
     r"""The log spectral distance is used to compute the difference between spectra of two fields.
 
     It is also called log spectral distorsion.
@@ -68,10 +68,17 @@ class LogFFT2Distance(FunctionalWeightedLoss):
 
     def __init__(
         self,
-        node_weights: torch.Tensor,
+        x_dim: int,
+        y_dim: int,
         ignore_nans: bool = False,
     ) -> None:
-        super().__init__(node_weights, ignore_nans)
+        super().__init__(ignore_nans)
+        LOGGER.warning(
+            "LogFFT2Distance can only be used with data on 2D grids.",
+        )
+        self.x_dim = x_dim
+        self.y_dim = y_dim
+        LOGGER.warning("Please use x_dim and y_dim such that field_shape=(x_dim, y_dim).")
 
     def calculate_difference(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return log_rfft2_distance(pred, target, dims=(self.x_dim, self.y_dim))
@@ -89,7 +96,7 @@ class LogFFT2Distance(FunctionalWeightedLoss):
         return torch.sqrt(torch.mean(result))
 
 
-class FourierCorrelationLoss(FunctionalWeightedLoss):
+class FourierCorrelationLoss(FunctionalLoss):
     r"""The log spectral distance is used to compute the difference between spectra of two fields.
 
     See https://arxiv.org/pdf/2410.23159.pdf for more details.
@@ -97,15 +104,17 @@ class FourierCorrelationLoss(FunctionalWeightedLoss):
 
     def __init__(
         self,
-        node_weights: torch.Tensor,
         x_dim: int,
         y_dim: int,
-        time_weights: torch.Tensor = None,
         ignore_nans: bool = False,
     ) -> None:
-        super().__init__(node_weights, time_weights, ignore_nans)
+        super().__init__(ignore_nans)
+        LOGGER.warning(
+            "Fourier Correlation loss can only be used with data on 2D grids.",
+        )
         self.x_dim = x_dim
         self.y_dim = y_dim
+        LOGGER.warning("Please use x_dim and y_dim such that field_shape=(x_dim, y_dim).")
 
     def calculate_difference(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         power_spectra_real, power_spectra_fake = get_spectra(pred, target, dims=(self.x_dim, self.y_dim))
