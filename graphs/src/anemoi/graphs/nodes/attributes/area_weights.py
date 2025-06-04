@@ -377,6 +377,7 @@ class IsolatitudeAreaWeights(BaseLatWeightedAttribute):
         # Compute the latitude band area
         lat_1 = divisory_lats[1:]
         lat_2 = divisory_lats[:-1]
+        assert np.all(lat_1 >= lat_2), "Nodes should be sorted by latitude."
         ring_area_km = 2 * np.pi * EARTH_RADIUS * (np.sin(lat_1) - np.sin(lat_2))
 
         # Compute the number of points/nodes at each latitude band
