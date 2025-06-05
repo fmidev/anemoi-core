@@ -169,7 +169,7 @@ class GraphForecaster(pl.LightningModule):
         self.grid_dim = -2
 
         # check sharding support
-        self.keep_batch_sharded = self.config.model.keep_batch_sharded
+        self.keep_batch_sharded = self.config.model.get("keep_batch_sharded", True)
         read_group_supports_sharding = reader_group_size == self.config.hardware.num_gpus_per_model
         assert read_group_supports_sharding or not self.keep_batch_sharded, (
             f"Reader group size {reader_group_size} does not match the number of GPUs per model "

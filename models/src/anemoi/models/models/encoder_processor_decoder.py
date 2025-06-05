@@ -338,7 +338,6 @@ class AnemoiModelEncProcDec(nn.Module):
             in_out_sharded and (grid_shard_shapes is None or model_comm_group is None)
         ), "If input is sharded, grid_shard_shapes and model_comm_group must be provided."
 
-        # SL, todo: check if we need a act. checkpoint here
         x_data_latent, x_skip, shard_shapes_data = self._assemble_input(
             x, batch_size, grid_shard_shapes, model_comm_group
         )
