@@ -409,11 +409,9 @@ class DDPEnsGroupStrategy(DDPStrategy):
 
         ens_comm_subgroups = [torch.distributed.new_group(x) for x in ens_comm_subgroup_ranks]
 
-        ens_comm_subgroup_size = (
-            self.model_comm_group_size if self.model_comm_group_size < self.ens_comm_group_size else 1
-        )
+        ens_comm_subgroup_size = self.ens_comm_group_size // self.model_comm_group_size
         ens_comm_subgroup_id = ens_comm_group_id * self.model_comm_group_size + model_comm_group_rank
-        ens_comm_subgroup_rank = ens_comm_group_rank % ens_comm_subgroup_size
+        ens_comm_subgroup_rank = ens_comm_group_rank // self.model_comm_group_size
         ens_comm_num_subgroups = self.world_size // ens_comm_subgroup_size
 
         ens_comm_subgroup = ens_comm_subgroups[ens_comm_subgroup_id]

@@ -210,9 +210,14 @@ class GraphForecaster(pl.LightningModule):
         self.model_comm_group_id = 0
         self.model_comm_group_rank = 0
         self.model_comm_num_groups = 1
+        self.model_comm_group_size = 1
 
         self.reader_group_id = 0
         self.reader_group_rank = 0
+        self.reader_group_size = 1
+
+        self.grid_shard_shapes = None
+        self.grid_shard_slice = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(
@@ -415,7 +420,7 @@ class GraphForecaster(pl.LightningModule):
         torch.Tensor
             Batch after transfer
         """
-        if self.keep_batch_sharded:
+        if self.keep_batch_sharded and self.model_comm_group_size > 1:
             self.grid_shard_shapes = self.grid_indices.shard_shapes
             self.grid_shard_slice = self.grid_indices.get_shard_indices(self.reader_group_rank)
         else:
@@ -465,7 +470,7 @@ class GraphForecaster(pl.LightningModule):
         grid_shard_shapes = self.grid_indices.shard_shapes
         grid_size = self.grid_indices.grid_size
 
-        if grid_size == batch.shape[self.grid_dim]:
+        if grid_size == batch.shape[self.grid_dim] or self.reader_group_size == 1:
             return batch  # already have the full grid
 
         shard_shapes = apply_shard_shapes(batch, self.grid_dim, grid_shard_shapes)

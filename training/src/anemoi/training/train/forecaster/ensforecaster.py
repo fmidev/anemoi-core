@@ -146,7 +146,7 @@ class GraphEnsForecaster(GraphForecaster):
         y_pred: torch.Tensor,
         y: torch.Tensor,
         loss: torch.nn.Module,
-        ens_comm_group_size: int,
+        ens_comm_subgroup_size: int,
         ens_comm_subgroup: ProcessGroup,
         model_comm_group: ProcessGroup,
         return_pred_ens: bool = False,
@@ -183,7 +183,7 @@ class GraphEnsForecaster(GraphForecaster):
         y_pred_ens = gather_tensor(
             y_pred.clone(),  # for bwd because we checkpoint this region
             dim=1,
-            shapes=[y_pred.shape] * ens_comm_group_size,
+            shapes=[y_pred.shape] * ens_comm_subgroup_size,
             mgroup=ens_comm_subgroup,
         )
 
