@@ -16,9 +16,6 @@ from hydra import compose
 from hydra import initialize
 from omegaconf import OmegaConf
 
-from anemoi.utils.testing import get_test_archive
-from anemoi.utils.testing import get_test_data
-
 
 @pytest.fixture(autouse=True)
 def set_working_directory() -> None:
@@ -66,8 +63,8 @@ def architecture_config(request: pytest.FixtureRequest, testing_modifications_wi
 def architecture_config_with_data(
     request: pytest.FixtureRequest,
     testing_modifications_with_temp_dir: OmegaConf,
+    download_datasets: callable,
 ) -> OmegaConf:
-
     overrides = request.param
     with initialize(version_base=None, config_path="../../src/anemoi/training/config", job_name="test_config"):
         template = compose(
@@ -76,7 +73,7 @@ def architecture_config_with_data(
         )  # apply architecture overrides to template since they override a default
 
     use_case_modifications = OmegaConf.load(Path.cwd() / "training/tests/integration/config/test_config.yaml")
-    tmp_dir, rel_paths = _download_datasets(use_case_modifications, ["dataset"])
+    tmp_dir, rel_paths = download_datasets(use_case_modifications, ["dataset"])
     use_case_modifications.hardware.paths.data = tmp_dir
     use_case_modifications.hardware.files.dataset = rel_paths[0]
 
@@ -98,13 +95,16 @@ def stretched_config(testing_modifications_with_temp_dir: OmegaConf) -> OmegaCon
 
 
 @pytest.fixture
-def stretched_config_with_data(testing_modifications_with_temp_dir: OmegaConf) -> OmegaConf:
+def stretched_config_with_data(
+    testing_modifications_with_temp_dir: OmegaConf,
+    download_datasets: callable,
+) -> OmegaConf:
     with initialize(version_base=None, config_path="../../src/anemoi/training/config", job_name="test_stretched"):
         template = compose(config_name="stretched")
 
     use_case_modifications = OmegaConf.load(Path.cwd() / "training/tests/integration/config/test_stretched.yaml")
 
-    tmp_dir, (dataset, forcing_dataset) = _download_datasets(use_case_modifications, ["dataset", "forcing_dataset"])
+    tmp_dir, (dataset, forcing_dataset) = download_datasets(use_case_modifications, ["dataset", "forcing_dataset"])
     use_case_modifications.hardware.paths.data = tmp_dir
     use_case_modifications.hardware.files.dataset = dataset
     use_case_modifications.hardware.files.forcing_dataset = forcing_dataset
@@ -127,13 +127,13 @@ def lam_config(testing_modifications_with_temp_dir: OmegaConf) -> OmegaConf:
 
 
 @pytest.fixture
-def lam_config_with_data(testing_modifications_with_temp_dir: OmegaConf) -> OmegaConf:
+def lam_config_with_data(testing_modifications_with_temp_dir: OmegaConf, download_datasets: callable) -> OmegaConf:
     with initialize(version_base=None, config_path="../../src/anemoi/training/config", job_name="test_lam"):
         template = compose(config_name="lam")
 
     use_case_modifications = OmegaConf.load(Path.cwd() / "training/tests/integration/config/test_lam.yaml")
 
-    tmp_dir, (dataset, forcing_dataset) = _download_datasets(use_case_modifications, ["dataset", "forcing_dataset"])
+    tmp_dir, (dataset, forcing_dataset) = download_datasets(use_case_modifications, ["dataset", "forcing_dataset"])
     use_case_modifications.hardware.paths.data = tmp_dir
     use_case_modifications.hardware.files.dataset = dataset
     use_case_modifications.hardware.files.forcing_dataset = forcing_dataset
@@ -144,7 +144,7 @@ def lam_config_with_data(testing_modifications_with_temp_dir: OmegaConf) -> Omeg
 
 
 @pytest.fixture
-def lam_config_with_data_and_graph(lam_config_with_data: OmegaConf) -> OmegaConf:
+def lam_config_with_data_and_graph(lam_config_with_data: OmegaConf, get_test_data: callable) -> OmegaConf:
     existing_graph_config = OmegaConf.load(Path.cwd() / "training/src/anemoi/training/config/graph/existing.yaml")
     lam_config_with_data.graph = existing_graph_config
 
@@ -171,7 +171,7 @@ def ensemble_config(testing_modifications_with_temp_dir: OmegaConf) -> OmegaConf
 
 
 @pytest.fixture
-def ensemble_config_with_data(testing_modifications_with_temp_dir: OmegaConf) -> OmegaConf:
+def ensemble_config_with_data(testing_modifications_with_temp_dir: OmegaConf, download_datasets: callable) -> OmegaConf:
     overrides = ["model=graphtransformer_ens", "graph=multi_scale"]
 
     with initialize(version_base=None, config_path="../../src/anemoi/training/config", job_name="test_ensemble_crps"):
@@ -179,7 +179,7 @@ def ensemble_config_with_data(testing_modifications_with_temp_dir: OmegaConf) ->
 
     use_case_modifications = OmegaConf.load(Path.cwd() / "training/tests/integration/config/test_ensemble_crps.yaml")
 
-    tmp_dir, rel_paths = _download_datasets(use_case_modifications, ["dataset"])
+    tmp_dir, rel_paths = download_datasets(use_case_modifications, ["dataset"])
     use_case_modifications.hardware.paths.data = tmp_dir
     use_case_modifications.hardware.files.dataset = rel_paths[0]
 
@@ -188,34 +188,39 @@ def ensemble_config_with_data(testing_modifications_with_temp_dir: OmegaConf) ->
     return cfg
 
 
-def _download_datasets(config: OmegaConf, list_datasets: list[str]) -> tuple[str, list[str]]:
-    tmp_paths = []
-    dataset_names = []
+@pytest.fixture
+def download_datasets(get_test_archive: callable) -> callable:
+    def _download_datasets(config: OmegaConf, list_datasets: list[str]) -> tuple[str, list[str]]:
+        tmp_paths = []
+        dataset_names = []
 
-    for dataset in list_datasets:
-        url_dataset = config.hardware.files[dataset] + ".tgz"
-        name_dataset = Path(config.hardware.files[dataset]).name
-        tmp_path_dataset = get_test_archive(url_dataset)
-        tmp_paths.append(tmp_path_dataset)
-        dataset_names.append(name_dataset)
+        for dataset in list_datasets:
+            url_dataset = config.hardware.files[dataset] + ".tgz"
+            name_dataset = Path(config.hardware.files[dataset]).name
+            tmp_path_dataset = get_test_archive(url_dataset)
+            tmp_paths.append(tmp_path_dataset)
+            dataset_names.append(name_dataset)
 
-    if len(list_datasets) == 1:
-        return tmp_paths[0], dataset_names
-    tmp_dir = os.path.commonprefix([tmp_paths[0], tmp_paths[1]])[:-1]  # remove trailing slash
-    rel_paths = [Path(path).name + "/" + name for (name, path) in zip(dataset_names, tmp_paths)]
-    return tmp_dir, rel_paths
+        if len(list_datasets) == 1:
+            return tmp_paths[0], dataset_names
+        tmp_dir = os.path.commonprefix([tmp_paths[0], tmp_paths[1]])[:-1]  # remove trailing slash
+        rel_paths = [Path(path).name + "/" + name for (name, path) in zip(dataset_names, tmp_paths)]
+        return tmp_dir, rel_paths
+
+    return _download_datasets
 
 
 @pytest.fixture
 def gnn_config_with_data(
     testing_modifications_with_temp_dir: OmegaConf,
+    download_datasets: callable,
 ) -> OmegaConf:
 
     with initialize(version_base=None, config_path="../../src/anemoi/training/config", job_name="test_config"):
         template = compose(config_name="config")
 
     use_case_modifications = OmegaConf.load(Path.cwd() / "training/tests/integration/config/test_config.yaml")
-    tmp_dir, rel_paths = _download_datasets(use_case_modifications, ["dataset"])
+    tmp_dir, rel_paths = download_datasets(use_case_modifications, ["dataset"])
     use_case_modifications.hardware.paths.data = tmp_dir
     use_case_modifications.hardware.files.dataset = rel_paths[0]
 
