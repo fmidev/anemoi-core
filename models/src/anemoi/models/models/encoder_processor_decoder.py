@@ -78,8 +78,6 @@ class AnemoiModelEncProcDec(nn.Module):
 
         self._truncation_data = truncation_data
 
-        self.input_dim = self._calculate_input_dim(model_config)
-
         # we can't register these as buffers because DDP does not support sparse tensors
         # these will be moved to the GPU when first used via sefl.interpolate_down/interpolate_up
         self.A_down, self.A_up = None, None
@@ -132,7 +130,7 @@ class AnemoiModelEncProcDec(nn.Module):
             [
                 instantiate(
                     cfg,
-                    name_to_index=self.data_indices.internal_model.output.name_to_index,
+                    name_to_index=self.data_indices.model.output.name_to_index,
                     statistics=self.statistics,
                     name_to_index_stats=self.data_indices.data.input.name_to_index,
                 )
@@ -238,31 +236,28 @@ class AnemoiModelEncProcDec(nn.Module):
             x_out = bounding(x_out)
         return x_out
 
-    def _calculate_input_dim(self, model_config):
-        return self.multi_step * self.num_input_channels + self.node_attributes.attr_ndims[self._graph_name_data]
-
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
-        self.num_input_channels = len(data_indices.internal_model.input)
-        self.num_output_channels = len(data_indices.internal_model.output)
+        self.num_input_channels = len(data_indices.model.input)
+        self.num_output_channels = len(data_indices.model.output)
         self.num_input_channels_prognostic = len(data_indices.model.input.prognostic)
-        self._internal_input_idx = data_indices.internal_model.input.prognostic
-        self._internal_output_idx = data_indices.internal_model.output.prognostic
+        self._internal_input_idx = data_indices.model.input.prognostic
+        self._internal_output_idx = data_indices.model.output.prognostic
         self.input_dim = (
             self.multi_step * self.num_input_channels + self.node_attributes.attr_ndims[self._graph_name_data]
         )
 
     def _assert_matching_indices(self, data_indices: dict) -> None:
 
-        assert len(self._internal_output_idx) == len(data_indices.internal_model.output.full) - len(
-            data_indices.internal_model.output.diagnostic
+        assert len(self._internal_output_idx) == len(data_indices.model.output.full) - len(
+            data_indices.model.output.diagnostic
         ), (
             f"Mismatch between the internal data indices ({len(self._internal_output_idx)}) and "
-            f"the internal output indices excluding diagnostic variables "
-            f"({len(data_indices.internal_model.output.full) - len(data_indices.internal_model.output.diagnostic)})",
+            f"the output indices excluding diagnostic variables "
+            f"({len(data_indices.model.output.full) - len(data_indices.model.output.diagnostic)})",
         )
         assert len(self._internal_input_idx) == len(
             self._internal_output_idx,
-        ), f"Internal model indices must match {self._internal_input_idx} != {self._internal_output_idx}"
+        ), f"Model indices must match {self._internal_input_idx} != {self._internal_output_idx}"
 
     def _run_mapper(
         self,
