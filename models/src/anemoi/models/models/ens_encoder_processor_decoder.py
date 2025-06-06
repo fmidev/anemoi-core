@@ -64,8 +64,6 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
 
         node_attributes_data = self.node_attributes(self._graph_name_data, batch_size=bse)
         if grid_shard_shapes is not None:
-            # select grid_shard_slice of node_attributes but with proper gradient propagation in bwd
-            # the fwd pass is equivalent to node_attributes_data = node_attributes_data[grid_shard_slice, ...]
             shard_shapes_nodes = self._get_shard_shapes(node_attributes_data, 0, grid_shard_shapes, model_comm_group)
             node_attributes_data = shard_tensor(node_attributes_data, 0, shard_shapes_nodes, model_comm_group)
 
