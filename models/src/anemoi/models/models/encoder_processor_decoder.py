@@ -168,9 +168,6 @@ class AnemoiModelEncProcDec(nn.Module):
         if self.A_down is not None or self.A_up is not None:
             if grid_shard_shapes is not None:
                 shard_shapes = self._get_shard_shapes(x, 0, grid_shard_shapes, model_comm_group)
-                shard_shapes_channels = [  # save shard shapes for channels:
-                    shapes[-1] for shapes in get_shard_shapes(x, -1, model_comm_group)
-                ]
                 # grid-sharded input: reshard to channel-shards to apply truncation
                 x = shard_channels(x, shard_shapes, model_comm_group)  # we get the full sequence here
 
@@ -185,8 +182,7 @@ class AnemoiModelEncProcDec(nn.Module):
 
             if grid_shard_shapes is not None:
                 # back to grid-sharding as before
-                shard_shapes_channels = self._get_shard_shapes(x, -1, shard_shapes_channels, model_comm_group)
-                x = gather_channels(x, shard_shapes_channels, model_comm_group)
+                x = gather_channels(x, shard_shapes, model_comm_group)
 
         return x
 
