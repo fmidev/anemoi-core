@@ -27,7 +27,6 @@ def get_k_hop_edges(
     edge_index: Adj,
     num_hops: int = 1,
     num_nodes: Optional[int] = None,
-    relabel_nodes: bool = False,
 ) -> tuple[Adj, Tensor]:
     """Return 1 hop subgraph.
 
@@ -53,7 +52,6 @@ def get_k_hop_edges(
         edge_index=edge_index,
         directed=True,
         num_nodes=num_nodes,
-        relabel_nodes=relabel_nodes,
     )
 
     return edge_attr[mask_to_index(edge_mask_k)], edge_index_k
@@ -64,7 +62,7 @@ def sort_edges_1hop_sharding(
     edge_attr: Tensor,
     edge_index: Adj,
     mgroup: Optional[ProcessGroup] = None,
-    relabel_nodes: bool = False,
+    relabel_dst_nodes: bool = False,
 ) -> tuple[Adj, Tensor, list, list]:
     """Rearanges edges into 1 hop neighbourhoods for sharding across GPUs.
 
@@ -78,6 +76,8 @@ def sort_edges_1hop_sharding(
         edge index
     mgroup : ProcessGroup
         model communication group
+    relabel_dst_nodes : bool, optional
+        whether to relabel destination nodes to be contiguous, by default False
 
     Returns
     -------
@@ -89,7 +89,7 @@ def sort_edges_1hop_sharding(
         num_chunks = dist.get_world_size(group=mgroup)
 
         edge_attr_list, edge_index_list = sort_edges_1hop_chunks(
-            num_nodes, edge_attr, edge_index, num_chunks, relabel_nodes
+            num_nodes, edge_attr, edge_index, num_chunks, relabel_dst_nodes=relabel_dst_nodes
         )
 
         edge_index_shapes = [x.shape for x in edge_index_list]
@@ -105,7 +105,7 @@ def sort_edges_1hop_chunks(
     edge_attr: Tensor,
     edge_index: Adj,
     num_chunks: int,
-    relabel_nodes: bool = False,
+    relabel_dst_nodes: bool = False,
 ) -> tuple[list[Tensor], list[Adj]]:
     """Rearanges edges into 1 hop neighbourhood chunks.
 
@@ -119,6 +119,8 @@ def sort_edges_1hop_chunks(
         edge index
     num_chunks : int
         number of chunks used if mgroup is None
+    relabel_dst_nodes : bool, optional
+        whether to relabel nodes in the subgraph, by default False
 
     Returns
     -------
@@ -135,17 +137,18 @@ def sort_edges_1hop_chunks(
     edge_attr_list = []
     for node_chunk in node_chunks:
         if isinstance(num_nodes, int):
-            edge_attr_chunk, edge_index_chunk = get_k_hop_edges(
-                node_chunk, edge_attr, edge_index, num_nodes=num_nodes, relabel_nodes=relabel_nodes
-            )
+            edge_attr_chunk, edge_index_chunk = get_k_hop_edges(node_chunk, edge_attr, edge_index, num_nodes=num_nodes)
         else:
             edge_index_chunk, edge_attr_chunk = bipartite_subgraph(
                 (nodes_src, node_chunk),
                 edge_index,
                 edge_attr,
                 size=(num_nodes[0], num_nodes[1]),
-                relabel_nodes=relabel_nodes,
             )
+
+        if relabel_dst_nodes:  # relabel dst nodes to be contiguous
+            edge_index_chunk[1] -= node_chunk[0]  # shift dst nodes to start from 0
+
         edge_index_list.append(edge_index_chunk)
         edge_attr_list.append(edge_attr_chunk)
 
@@ -182,91 +185,3 @@ def drop_unconnected_src_nodes(x_src: Tensor, edge_index: Adj, num_nodes: tuple[
     )
 
     return x_src[connected_src_nodes], edge_index_new
-
-
-def get_edges_sharding(
-    num_nodes: tuple[int, int],
-    edge_attr: Tensor,
-    edge_index: Adj,
-    mgroup: Optional[ProcessGroup] = None,
-    relabel_nodes: bool = False,
-):
-    if mgroup:
-        num_chunks = dist.get_world_size(group=mgroup)
-        dst_node_chunks, edge_counts = partition_dst_nodes(
-            edge_index,
-            num_chunks,
-            balanced=False,  # use unbalanced partitioning to match sharding of dst nodes
-            return_edge_counts=True,
-        )
-
-        nodes_src = torch.arange(num_nodes[0], device=edge_index.device)
-        my_dst_node_chunk = dst_node_chunks[dist.get_rank(group=mgroup)]
-
-        edge_index, edge_attr = bipartite_subgraph(
-            (nodes_src, my_dst_node_chunk),
-            edge_index,
-            edge_attr,
-            size=num_nodes,
-            relabel_nodes=relabel_nodes,  # relabel dst nodes to be contiguous, starting from 0
-        )
-
-        edge_attr_shapes = [(edge_count, *edge_attr.shape[1:]) for edge_count in edge_counts]
-        edge_index_shapes = [(2, edge_count) for edge_count in edge_counts]
-
-        return edge_attr, edge_index, edge_attr_shapes, edge_index_shapes
-
-    return edge_attr, edge_index, [], []
-
-
-def partition_dst_nodes(
-    edge_index, num_chunks, balanced=False, return_edge_counts=False
-) -> Union[list, tuple[list, list]]:
-    """Partition destination nodes into chunks for distributed processing.
-    Args:
-        edge_index (torch.Tensor): The edge index tensor
-            !! expected to hold contiguous src/dst node indices starting from 0 !!
-        num_chunks (int): The number of chunks to split the destination nodes into.
-        balanced (bool, optional): If True, partition the destination nodes into chunks
-            balanced by the number of edges (greedy, not necessarily optimal).
-    Returns:
-        tuple[list, Optional[list]]: A tuple containing the partitioned destination nodes and
-            the corresponding edge counts for each chunk.
-    """
-
-    # unique dst nodes (sorted), #adjacent edges per node
-    dst_nodes, edge_counts = torch.unique(edge_index[1], return_counts=True, sorted=True)
-
-    assert num_chunks < len(
-        dst_nodes
-    ), f"num_chunks ({num_chunks}) must be smaller than the number of unique dst nodes ({len(dst_nodes)})"
-
-    if balanced:
-        # split dst nodes into chunks s.t. each chunk has roughly the same number of edges
-        cumsum_edge_counts = torch.cumsum(edge_counts, dim=0)
-        # calculate target cumsum edge counts for each chunk with optimal balancing
-        targets = float(cumsum_edge_counts[-1] / num_chunks) * torch.arange(1, num_chunks, device=edge_index.device)
-        # approximate optimal target chunk boundaries
-        boundaries = torch.searchsorted(cumsum_edge_counts, targets)
-
-        # append first and last boundary [inclusive, exclusive)
-        boundaries = torch.cat(
-            [
-                torch.tensor([0], device=edge_index.device),
-                boundaries,
-                torch.tensor([len(dst_nodes)], device=edge_index.device),
-            ]
-        )
-
-        # maybe fall back to unbalanced partitioning instead?
-        assert torch.all(boundaries[1:] > boundaries[:-1]), "Empty chunk in partition_dst_nodes."
-
-        dst_node_chunks = [dst_nodes[boundaries[i] : boundaries[i + 1]] for i in range(num_chunks)]
-    else:
-        dst_node_chunks = torch.tensor_split(dst_nodes, num_chunks)
-
-    if return_edge_counts:
-        edge_counts = [edge_counts[dst_node_chunk].sum().item() for dst_node_chunk in dst_node_chunks]
-        return dst_node_chunks, edge_counts
-
-    return dst_node_chunks
