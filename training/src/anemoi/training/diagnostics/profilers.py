@@ -635,12 +635,8 @@ class BenchmarkProfiler(Profiler):
         if time_rows:
             time_rows_dict = {}
             for row in time_rows:
-                try:
-                    key, val = row.split(":")
-                    val = convert_to_seconds(val.strip())
-                except ValueError as e:
-                    LOGGER.warning("Value error: %s for row: %s, skipping.", e, row)
-                    continue
+                key, val = row.split(":")
+                val = convert_to_seconds(val.strip())
                 time_rows_dict[key] = val
             self.time_rows_dict = time_rows_dict
 

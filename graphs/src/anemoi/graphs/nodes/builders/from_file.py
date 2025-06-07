@@ -18,14 +18,13 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from torch_geometric.data import HeteroData
 
-from anemoi.datasets import open_dataset
 from anemoi.graphs.generate.masks import KNNAreaMaskBuilder
 from anemoi.graphs.nodes.builders.base import BaseNodeBuilder
 
 LOGGER = logging.getLogger(__name__)
 
 
-class ZarrDatasetNodes(BaseNodeBuilder):
+class AnemoiDatasetNodes(BaseNodeBuilder):
     """Nodes from an anemoi dataset.
 
     Attributes
@@ -59,8 +58,16 @@ class ZarrDatasetNodes(BaseNodeBuilder):
         torch.Tensor of shape (num_nodes, 2)
             A 2D tensor with the coordinates, in radians.
         """
+        from anemoi.datasets import open_dataset
+
         dataset = open_dataset(self.dataset)
         return self.reshape_coords(dataset.latitudes, dataset.longitudes)
+
+
+class ZarrDatasetNodes(AnemoiDatasetNodes):
+    def __init__(self, dataset: DictConfig, name: str) -> None:
+        super().__init__(dataset, name)
+        LOGGER.warning(f"{self.__class__.__name__} is now deprecated in favour of AnemoiDatasetNodes.")
 
 
 class TextNodes(BaseNodeBuilder):
