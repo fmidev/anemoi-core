@@ -18,16 +18,16 @@ from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch_geometric.data import HeteroData
 
-from anemoi.models.distributed.shapes import get_shape_shards
+from anemoi.models.distributed.shapes import get_shard_shapes
 from anemoi.models.layers.graph import NamedNodesAttributes
 from anemoi.models.layers.graph import TrainableTensor
-from anemoi.models.models import BaseAnemoiModelEncProcDec
+from anemoi.models.models import AnemoiModelEncProcDec
 from anemoi.utils.config import DotDict
 
 LOGGER = logging.getLogger(__name__)
 
 
-class AnemoiModelEncProcDecHierarchical(BaseAnemoiModelEncProcDec):
+class AnemoiModelEncProcDecHierarchical(AnemoiModelEncProcDec):
     """Message passing hierarchical graph neural network."""
 
     def __init__(
@@ -74,6 +74,8 @@ class AnemoiModelEncProcDecHierarchical(BaseAnemoiModelEncProcDec):
         self.node_attributes = NamedNodesAttributes(model_config.model.trainable_parameters.hidden, self._graph_data)
 
         input_dim = self.multi_step * self.num_input_channels + self.node_attributes.attr_ndims[self._graph_name_data]
+
+        self.supports_sharded_input = False
 
         # Encoder data -> hidden
         self.encoder = instantiate(
@@ -206,10 +208,10 @@ class AnemoiModelEncProcDecHierarchical(BaseAnemoiModelEncProcDec):
             x_trainable_hiddens[hidden] = self.node_attributes(hidden, batch_size=batch_size)
 
         # Get data and hidden shapes for sharding
-        shard_shapes_data = get_shape_shards(x_trainable_data, 0, model_comm_group)
+        shard_shapes_data = get_shard_shapes(x_trainable_data, 0, model_comm_group)
         shard_shapes_hiddens = {}
         for hidden, x_latent in x_trainable_hiddens.items():
-            shard_shapes_hiddens[hidden] = get_shape_shards(x_latent, 0, model_comm_group)
+            shard_shapes_hiddens[hidden] = get_shard_shapes(x_latent, 0, model_comm_group)
 
         # Run encoder
         x_data_latent, curr_latent = self._run_mapper(
