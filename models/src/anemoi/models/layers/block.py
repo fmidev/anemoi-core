@@ -261,8 +261,6 @@ class GraphConvBaseBlock(BaseBlock):
 
 
 class GraphConvProcessorBlock(GraphConvBaseBlock):
-    pass
-
     def forward(
         self,
         x: OptPairTensor,
