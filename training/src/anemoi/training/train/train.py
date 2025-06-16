@@ -15,23 +15,24 @@ import logging
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import Any
 
 import hydra
 import numpy as np
 import pytorch_lightning as pl
 import torch
 from hydra.utils import get_class
+from hydra.utils import instantiate
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
+from scipy.sparse import load_npz
 
-from anemoi.training.data.datamodule import AnemoiDatasetsDataModule
 from anemoi.training.diagnostics.callbacks import get_callbacks
 from anemoi.training.diagnostics.logger import get_mlflow_logger
 from anemoi.training.diagnostics.logger import get_tensorboard_logger
 from anemoi.training.diagnostics.logger import get_wandb_logger
-from anemoi.training.distributed.strategy import DDPGroupStrategy
 from anemoi.training.schemas.base_schema import BaseSchema
 from anemoi.training.schemas.base_schema import UnvalidatedBaseSchema
 from anemoi.training.schemas.base_schema import convert_to_omegaconf
@@ -64,16 +65,16 @@ class AnemoiTrainer:
         torch.set_float32_matmul_precision("high")
         # Resolve the config to avoid shenanigans with lazy loading
 
-        if config.no_validation:
-            config = OmegaConf.to_object(config)
-            self.config = UnvalidatedBaseSchema(**DictConfig(config))
-            LOGGER.info("Skipping config validation.")
-        else:
-
+        if config.config_validation:
             OmegaConf.resolve(config)
             self.config = BaseSchema(**config)
 
             LOGGER.info("Config validated.")
+        else:
+            config = OmegaConf.to_object(config)
+            self.config = UnvalidatedBaseSchema(**DictConfig(config))
+
+            LOGGER.info("Skipping config validation.")
 
         self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
         self.load_weights_only = self.config.training.load_weights_only
@@ -88,12 +89,20 @@ class AnemoiTrainer:
         # Update paths to contain the run ID
         self._update_paths()
 
+        # Update dry_run attribute, check if checkpoint exists
+        self._check_dry_run()
+
+        # Check for dry run, i.e. run id without data
         self._log_information()
 
     @cached_property
-    def datamodule(self) -> AnemoiDatasetsDataModule:
+    def datamodule(self) -> Any:
         """DataModule instance and DataSets."""
-        datamodule = AnemoiDatasetsDataModule(self.config, self.graph_data)
+        datamodule = instantiate(
+            convert_to_omegaconf(self.config).datamodule,
+            convert_to_omegaconf(self.config),
+            self.graph_data,
+        )
         self.config.data.num_features = len(datamodule.ds_train.data.variables)
         LOGGER.info("Number of data variables: %s", str(len(datamodule.ds_train.data.variables)))
         LOGGER.debug("Variables: %s", str(datamodule.ds_train.data.variables))
@@ -154,34 +163,72 @@ class AnemoiTrainer:
         )
 
     @cached_property
+    def truncation_data(self) -> dict:
+        """Truncation data.
+
+        Loads truncation data.
+        """
+        truncation_data = {}
+        if self.config.hardware.files.truncation is not None:
+            truncation_data["down"] = load_npz(
+                Path(self.config.hardware.paths.truncation, self.config.hardware.files.truncation),
+            )
+        if self.config.hardware.files.truncation_inv is not None:
+            truncation_data["up"] = load_npz(
+                Path(self.config.hardware.paths.truncation, self.config.hardware.files.truncation_inv),
+            )
+
+        return truncation_data
+
+    @cached_property
     def model(self) -> pl.LightningModule:
         """Provide the model instance."""
+        assert (
+            not (
+                "GLU" in self.config.model.processor.layer_kernels["Activation"]["_target_"]
+                and ".Transformer" in self.config.model.processor.target_
+            )
+            and not (
+                "GLU" in self.config.model.encoder.layer_kernels["Activation"]["_target_"]
+                and ".Transformer" in self.config.model.encoder.target_
+            )
+            and not (
+                "GLU" in self.config.model.decoder.layer_kernels["Activation"]["_target_"]
+                and ".Transformer" in self.config.model.decoder.target_
+            )
+        ), "GLU activation function is not supported in Transformer models, due to fixed dimensions. "
+        "Please use a different activation function."
+
         kwargs = {
             "config": self.config,
             "data_indices": self.data_indices,
             "graph_data": self.graph_data,
+            "truncation_data": self.truncation_data,
             "metadata": self.metadata,
             "statistics": self.datamodule.statistics,
+            "statistics_tendencies": self.datamodule.statistics_tendencies,
             "supporting_arrays": self.supporting_arrays,
         }
 
-        model_class = get_class(self.config.training.task)
-        model = model_class(**kwargs)
+        model_task = get_class(self.config.training.model_task)
+        model = model_task(**kwargs)
 
         # Load the model weights
         if self.load_weights_only:
-            if hasattr(self.config.training, "transfer_learning"):
-                # Sanify the checkpoint for transfer learning
-                if self.config.training.transfer_learning:
-                    LOGGER.info("Loading weights with Transfer Learning from %s", self.last_checkpoint)
-                    model = transfer_learning_loading(model, self.last_checkpoint)
-                else:
-                    LOGGER.info("Restoring only model weights from %s", self.last_checkpoint)
-                    model = model_class.load_from_checkpoint(self.last_checkpoint, **kwargs, strict=False)
-
+            # Sanify the checkpoint for transfer learning
+            if self.config.training.transfer_learning:
+                LOGGER.info("Loading weights with Transfer Learning from %s", self.last_checkpoint)
+                model = transfer_learning_loading(model, self.last_checkpoint)
             else:
                 LOGGER.info("Restoring only model weights from %s", self.last_checkpoint)
-                model = model_class.load_from_checkpoint(self.last_checkpoint, **kwargs, strict=False)
+                # pop data_indices so that the data indices on the checkpoint do not get overwritten
+                # by the data indices from the new config
+                kwargs.pop("data_indices")
+                model = model_task.load_from_checkpoint(self.last_checkpoint, **kwargs, strict=False)
+
+            model.data_indices = self.data_indices
+            # check data indices in original checkpoint and current data indices are the same
+            self.data_indices.compare_variables(model._ckpt_model_name_to_index, self.data_indices.name_to_index)
 
         if hasattr(self.config.training, "submodules_to_freeze"):
             # Freeze the chosen model weights
@@ -202,15 +249,21 @@ class AnemoiTrainer:
     @cached_property
     def run_id(self) -> str:
         """Unique identifier for the current run."""
+        # When a run ID is provided
         if self.config.training.run_id and not self.config.training.fork_run_id:
             # Return the provided run ID - reuse run_id if resuming run
             return self.config.training.run_id
 
+        # When a run ID has been created externally and we want to fork a run
+        if self.config.training.run_id and self.config.training.fork_run_id:
+            return self.config.training.run_id
+
+        # When we rely on mlflow to create a new run ID
         if self.config.diagnostics.log.mlflow.enabled:
             # if using mlflow with a new run get the run_id from mlflow
             return self._get_mlflow_run_id()
 
-        # Generate a random UUID
+        # When no run ID is provided a random one is generated
         import uuid
 
         return str(uuid.uuid4())
@@ -242,7 +295,6 @@ class AnemoiTrainer:
             fork_id or self.lineage_run,
             self.config.hardware.files.warm_start or "last.ckpt",
         )
-
         # Check if the last checkpoint exists
         if Path(checkpoint).exists():
             LOGGER.info("Resuming training from last checkpoint: %s", checkpoint)
@@ -393,12 +445,28 @@ class AnemoiTrainer:
         LOGGER.info("Checkpoints path: %s", self.config.hardware.paths.checkpoints)
         LOGGER.info("Plots path: %s", self.config.hardware.paths.plots)
 
+    @rank_zero_only
+    def _check_dry_run(self) -> None:
+        """Check if the run ID is dry, e.g. without a checkpoint.
+
+        If the run ID is dry, the training will not be started.
+        This is used to check the run can be restarted from the checkpoint.
+        """
+        self.dry_run = False
+        if self.config.diagnostics.log.mlflow.enabled:
+            # Check if the run ID is dry - e.g. without a checkpoint
+            self.dry_run = (
+                self.mlflow_logger._parent_dry_run and not Path(self.config.hardware.paths.checkpoints).is_dir()
+            )
+            self.start_from_checkpoint = (
+                False if (self.dry_run and not bool(self.config.training.fork_run_id)) else self.start_from_checkpoint
+            )
+            LOGGER.info("Dry run: %s", self.dry_run)
+
     @cached_property
-    def strategy(self) -> DDPGroupStrategy:
-        """Training strategy."""
-        return DDPGroupStrategy(
-            self.config.hardware.num_gpus_per_model,
-            self.config.dataloader.read_group_size,
+    def strategy(self) -> Any:
+        return instantiate(
+            convert_to_omegaconf(self.config).training.strategy,
             static_graph=not self.config.training.accum_grad_batches > 1,
         )
 
@@ -433,11 +501,10 @@ class AnemoiTrainer:
         )
 
         LOGGER.debug("Starting training..")
-
         trainer.fit(
             self.model,
             datamodule=self.datamodule,
-            ckpt_path=None if self.load_weights_only else self.last_checkpoint,
+            ckpt_path=None if (self.load_weights_only) else self.last_checkpoint,
         )
 
         if self.config.diagnostics.print_memory_summary:

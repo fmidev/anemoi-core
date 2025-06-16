@@ -90,6 +90,9 @@ class GraphCreator:
 
             graph = edge_builder.register_attributes(graph, edges_cfg.get("attributes", {}))
 
+        if graph.num_nodes == 0:
+            LOGGER.warning("The graph that was created has no nodes. Please check your graph configuration file.")
+
         return graph
 
     def clean(self, graph: HeteroData) -> HeteroData:
@@ -136,7 +139,7 @@ class GraphCreator:
         Each post-processor should implement an `update_graph` method that takes and returns a HeteroData object.
         """
         for processor in self.config.get("post_processors", []):
-            graph = instantiate(processor).update_graph(graph)
+            graph = instantiate(processor).update_graph(graph, graph_config=self.config)
 
         return graph
 

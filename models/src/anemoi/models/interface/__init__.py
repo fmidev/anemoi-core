@@ -15,6 +15,10 @@ from hydra.utils import instantiate
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch_geometric.data import HeteroData
 
+from anemoi.models.distributed.graph import gather_tensor
+from anemoi.models.distributed.graph import shard_tensor
+from anemoi.models.distributed.shapes import apply_shard_shapes
+from anemoi.models.distributed.shapes import get_shard_shapes
 from anemoi.models.preprocessing import Processors
 from anemoi.utils.config import DotDict
 
@@ -60,6 +64,7 @@ class AnemoiModelInterface(torch.nn.Module):
         data_indices: dict,
         metadata: dict,
         supporting_arrays: dict = None,
+        truncation_data: dict,
     ) -> None:
         super().__init__()
         self.config = config
@@ -67,6 +72,7 @@ class AnemoiModelInterface(torch.nn.Module):
         self.multi_step = self.config.training.multistep_input
         self.graph_data = graph_data
         self.statistics = statistics
+        self.truncation_data = truncation_data
         self.metadata = metadata
         self.supporting_arrays = supporting_arrays if supporting_arrays is not None else {}
         self.data_indices = data_indices
@@ -91,6 +97,7 @@ class AnemoiModelInterface(torch.nn.Module):
             data_indices=self.data_indices,
             statistics=self.statistics,
             graph_data=self.graph_data,
+            truncation_data=self.truncation_data,
             _recursive_=False,  # Disables recursive instantiation by Hydra
         )
 
@@ -98,7 +105,7 @@ class AnemoiModelInterface(torch.nn.Module):
         self.forward = self.model.forward
 
     def predict_step(
-        self, batch: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None, **kwargs
+        self, batch: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None, gather_out: bool = True, **kwargs
     ) -> torch.Tensor:
         """Prediction step for the model.
 
@@ -106,6 +113,10 @@ class AnemoiModelInterface(torch.nn.Module):
         ----------
         batch : torch.Tensor
             Input batched data.
+        model_comm_group : Optional[ProcessGroup], optional
+            model communication group, specifies which GPUs work together
+        gather_out : str | None, optional
+            Specifies how to gather the output, by default None.
 
         Returns
         -------
@@ -123,6 +134,17 @@ class AnemoiModelInterface(torch.nn.Module):
             # batch, timesteps, horizonal space, variables
             x = batch[:, 0 : self.multi_step, None, ...]  # add dummy ensemble dimension as 3rd index
 
-            y_hat = self(x, model_comm_group)
+            grid_shard_shapes = None
+            if model_comm_group is not None:
+                shard_shapes = get_shard_shapes(x, -2, model_comm_group)
+                grid_shard_shapes = [shape[-2] for shape in shard_shapes]
+                x = shard_tensor(x, -2, shard_shapes, model_comm_group)
 
-        return self.post_processors(y_hat, in_place=False)
+            y_hat = self(x, model_comm_group=model_comm_group, grid_shard_shapes=grid_shard_shapes, **kwargs)
+
+            y_hat = self.post_processors(y_hat, in_place=False)
+
+            if gather_out and model_comm_group is not None:
+                y_hat = gather_tensor(y_hat, -2, apply_shard_shapes(y_hat, -2, grid_shard_shapes), model_comm_group)
+
+        return y_hat
