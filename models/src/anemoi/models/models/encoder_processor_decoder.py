@@ -9,7 +9,7 @@
 
 
 import logging
-from typing import Optional
+from typing import Optional, Union, Tuple
 
 import einops
 import numpy as np
@@ -305,8 +305,9 @@ class AnemoiModelEncProcDec(nn.Module):
         *,
         model_comm_group: Optional[ProcessGroup] = None,
         grid_shard_shapes: Optional[list] = None,
+        return_latent_states: bool = False,
         **kwargs,
-    ) -> Tensor:
+    ) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:
         """Forward pass of the model.
 
         Parameters
@@ -317,11 +318,16 @@ class AnemoiModelEncProcDec(nn.Module):
             Model communication group, by default None
         grid_shard_shapes : list, optional
             Shard shapes of the grid, by default None
+        return_latent_states : bool, optional
+            If True, also returns the latent states from encoder and processor.
+            By default False.
 
         Returns
         -------
         Tensor
             Output of the model, with the same shape as the input (sharded if input is sharded)
+        Tuple[Tensor, Tensor, Tensor]
+            If return_latent_states is True, returns (output, x_latent_from_encoder, x_latent_proc_output)
         """
         batch_size = x.shape[0]
         ensemble_size = x.shape[2]
@@ -338,7 +344,7 @@ class AnemoiModelEncProcDec(nn.Module):
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
         shard_shapes_hidden = get_shard_shapes(x_hidden_latent, 0, model_comm_group)
 
-        x_data_latent, x_latent = self._run_mapper(
+        x_data_latent, x_latent_from_encoder = self._run_mapper(
             self.encoder,
             (x_data_latent, x_hidden_latent),
             batch_size=batch_size,
@@ -349,18 +355,18 @@ class AnemoiModelEncProcDec(nn.Module):
             keep_x_dst_sharded=True,  # always keep x_latent sharded for the processor
         )
 
-        x_latent_proc = self.processor(
-            x_latent,
+        x_latent_from_processor = self.processor(
+            x_latent_from_encoder,
             batch_size=batch_size,
             shard_shapes=shard_shapes_hidden,
             model_comm_group=model_comm_group,
         )
 
-        x_latent_proc = x_latent_proc + x_latent
+        x_latent_from_proc = x_latent_from_processor + x_latent_from_encoder
 
         x_out = self._run_mapper(
             self.decoder,
-            (x_latent_proc, x_data_latent),
+            (x_latent_from_processor, x_data_latent),
             batch_size=batch_size,
             shard_shapes=(shard_shapes_hidden, shard_shapes_data),
             model_comm_group=model_comm_group,
@@ -370,5 +376,8 @@ class AnemoiModelEncProcDec(nn.Module):
         )
 
         x_out = self._assemble_output(x_out, x_skip, batch_size, ensemble_size, x.dtype)
+
+        if return_latent_states:
+            return x_out, x_latent_from_encoder, x_latent_from_processor
 
         return x_out
