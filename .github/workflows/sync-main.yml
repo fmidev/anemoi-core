@@ -1,0 +1,48 @@
+name: Sync main with upstream
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout your fork's main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install GitHub CLI
+        run: brew install gh
+
+      - name: Authenticate GitHub CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Sync fork with upstream
+        run: gh repo sync ${{ github.repository }} --branch main
+
+      - name: Disable all workflows except sync-main.yml
+        run: |
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            if [ "$base" != "sync-main.yml" ]; then
+              mv "$f" "$f.disabled"
+            fi
+          done
+          git add .github/workflows
+
+      - name: Disable new workflows
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --cached --quiet -- .github/workflows; then
+            git commit -m "Disable all workflows after sync"
+            git push origin main
+          else
+            echo "No workflows disabled."
+          fi
