@@ -41,6 +41,7 @@ from anemoi.training.utils.checkpoint import transfer_learning_loading
 from anemoi.training.utils.jsonify import map_config_to_primitives
 from anemoi.training.utils.seeding import get_base_seed
 from anemoi.utils.provenance import gather_provenance_info
+from anemoi.training.data.multidatamodule import AnemoiMultiDataModule
 
 if TYPE_CHECKING:
     from torch_geometric.data import HeteroData

@@ -10,6 +10,7 @@
 from .ensdatamodule import AnemoiEnsDatasetsDataModule
 from .singledatamodule import AnemoiDatasetsDataModule
 from .zipdatamodule import AnemoiDatasetsZipDataModule
+from .multidatamodule import AnemoiDatasetMultiDataModule
 
 __all__ = [
     "AnemoiDatasetsDataModule",
