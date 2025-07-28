@@ -1,0 +1,30 @@
+# anemoi/conf/graph/features/temporal_output.yaml
+# (Keep this file exactly as defined previously)
+overwrite: False # This ensures it merges with a base graph
+
+nodes:
+  temporal_output:
+    node_builder:
+      _target_: anemoi.graphs.nodes.StretchedTriNodes
+      lam_resolution: 8
+      global_resolution: 5
+      reference_node_name: ${graph.data}
+      mask_attr_name: cutout
+      margin_radius_km: 11
+    attributes:
+      area_weight:
+        _target_: anemoi.graphs.nodes.attributes.AreaWeights
+        norm: unit-max
+      cutout:
+        _target_: anemoi.graphs.nodes.attributes.CutOutMask
+
+edges:
+- source_name: ${graph.hidden}
+  target_name: temporal_output
+  edge_builder:
+    _target_: anemoi.graphs.edges.KNNEdges
+    num_nearest_neighbours: 3
+  attributes: ${graph.attributes.edges}
+
+output_nodes:
+  temporal: "temporal_output"
