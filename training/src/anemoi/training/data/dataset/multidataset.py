@@ -9,7 +9,7 @@ import numpy as np
 import math
 
 # Re-import necessary Anemoi components (ensure all these are available in this file or imported)
-from anemoi.data.indices import IndexCollection
+from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.utils.dates import frequency_to_seconds
 from anemoi.training.data.dataset.singledataset import NativeGridDataset
 

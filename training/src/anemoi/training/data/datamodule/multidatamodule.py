@@ -16,10 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from anemoi.datasets.data import open_dataset
 from anemoi.models.data_indices.collection import IndexCollection
-from anemoi.training.data.dataset import NativeGridDataset  # Base NativeGridDataset
-from anemoi.training.data.multidataset import (
-    NativeGridMultiDataset,
-)  # Our combined dataset
+from anemoi.training.data.dataset import NativeGridDataset , NativeGridMultiDataset
 
 from anemoi.training.schemas.base_schema import BaseSchema
 from anemoi.training.utils.worker_init import worker_init_func

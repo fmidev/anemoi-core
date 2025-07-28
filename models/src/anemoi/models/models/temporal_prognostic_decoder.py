@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
+from torch_geometric.data import HeteroData
 
 # Import the specific Graph Transformer Backward Mapper
 from anemoi.models.layers.mapper import GraphTransformerBackwardMapper
