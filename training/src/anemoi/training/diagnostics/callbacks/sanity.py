@@ -30,14 +30,22 @@ class CheckVariableOrder(pl.callbacks.Callback):
         _ : pl.LightningModule
             Not used
         """
-        data_name_to_index = trainer.datamodule.ds_train.name_to_index
+        # Get data_name_to_index from data_indices (handles both single and multi-dataset cases)
+        di = trainer.datamodule.data_indices
+        data_name_to_index = di[0].name_to_index if isinstance(di, (list, tuple)) else di.name_to_index
 
         if hasattr(trainer.model.module, "_ckpt_model_name_to_index"):
             self._model_name_to_index = trainer.model.module._ckpt_model_name_to_index
         else:
-            self._model_name_to_index = trainer.datamodule.data_indices.name_to_index
+            self._model_name_to_index = di[0].name_to_index if isinstance(di, (list, tuple)) else di.name_to_index
 
-        trainer.datamodule.data_indices.compare_variables(self._model_name_to_index, data_name_to_index)
+        # Handle both single IndexCollection and tuple of IndexCollections
+        if isinstance(di, (list, tuple)):
+            # For multi-dataset case, use the first dataset only for comparison
+            di[0].compare_variables(self._model_name_to_index, data_name_to_index)
+        else:
+            # For single dataset case
+            di.compare_variables(self._model_name_to_index, data_name_to_index)
 
     def on_validation_start(self, trainer: pl.Trainer, _: pl.LightningModule) -> None:
         """Check the order of the variables in the model from checkpoint and the validation data.
@@ -49,14 +57,18 @@ class CheckVariableOrder(pl.callbacks.Callback):
         _ : pl.LightningModule
             Not used
         """
-        data_name_to_index = trainer.datamodule.ds_valid.name_to_index
+        di = trainer.datamodule.data_indices
+        data_name_to_index = di[0].name_to_index if isinstance(di, (list, tuple)) else di.name_to_index
 
         if hasattr(trainer.model.module, "_ckpt_model_name_to_index"):
             self._model_name_to_index = trainer.model.module._ckpt_model_name_to_index
         else:
-            self._model_name_to_index = trainer.datamodule.data_indices.name_to_index
+            self._model_name_to_index = di[0].name_to_index if isinstance(di, (list, tuple)) else di.name_to_index
 
-        trainer.datamodule.data_indices.compare_variables(self._model_name_to_index, data_name_to_index)
+        if isinstance(di, (list, tuple)):
+            di[0].compare_variables(self._model_name_to_index, data_name_to_index)
+        else:
+            di.compare_variables(self._model_name_to_index, data_name_to_index)
 
     def on_test_start(self, trainer: pl.Trainer, _: pl.LightningModule) -> None:
         """Check the order of the variables in the model from checkpoint and the test data.
@@ -68,11 +80,15 @@ class CheckVariableOrder(pl.callbacks.Callback):
         _ : pl.LightningModule
             Not used
         """
-        data_name_to_index = trainer.datamodule.ds_test.name_to_index
+        di = trainer.datamodule.data_indices
+        data_name_to_index = di[0].name_to_index if isinstance(di, (list, tuple)) else di.name_to_index
 
         if hasattr(trainer.model.module, "_ckpt_model_name_to_index"):
             self._model_name_to_index = trainer.model.module._ckpt_model_name_to_index
         else:
-            self._model_name_to_index = trainer.datamodule.data_indices.name_to_index
+            self._model_name_to_index = di[0].name_to_index if isinstance(di, (list, tuple)) else di.name_to_index
 
-        trainer.datamodule.data_indices.compare_variables(self._model_name_to_index, data_name_to_index)
+        if isinstance(di, (list, tuple)):
+            di[0].compare_variables(self._model_name_to_index, data_name_to_index)
+        else:
+            di.compare_variables(self._model_name_to_index, data_name_to_index)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any
+from typing import Any, Union
 
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
@@ -21,8 +21,9 @@ from pydantic import model_validator
 from pydantic._internal import _model_construction
 from pydantic_core import PydanticCustomError
 from pydantic_core import ValidationError
+from pydantic import Field
 
-from anemoi.graphs.schemas.base_graph import BaseGraphSchema  # noqa: TC001
+from anemoi.graphs.schemas.base_graph import BaseGraphSchema, NetatmoGraphSchema  # noqa: TC001
 from anemoi.models.schemas.decoder import GraphTransformerDecoderSchema
 from anemoi.models.schemas.models import ModelSchema  # noqa: TC001
 from anemoi.utils.schemas import BaseModel
@@ -31,7 +32,7 @@ from anemoi.utils.schemas.errors import convert_errors
 
 # to make these available at runtime for pydantic, bug should be resolved in
 # future versions (see https://github.com/astral-sh/ruff/issues/7866)
-from .data import DataSchema  # noqa: TC001
+from .data import DataSchema, ZipDataSchema  # noqa: TC001
 from .dataloader import DataLoaderSchema  # noqa: TC001
 from .datamodule import DataModuleSchema  # noqa: TC001
 from .diagnostics import DiagnosticsSchema  # noqa: TC001
@@ -46,7 +47,7 @@ LOGGER = logging.getLogger(__name__)
 class BaseSchema(BaseModel):
     """Top-level schema for the training configuration."""
 
-    data: DataSchema
+    data: Union[DataSchema, ZipDataSchema] = Field(discriminator="target_")
     """Data configuration."""
     dataloader: DataLoaderSchema
     """Dataloader configuration."""
@@ -56,7 +57,7 @@ class BaseSchema(BaseModel):
     """Diagnostics configuration such as logging, plots and metrics."""
     hardware: HardwareSchema
     """Hardware configuration."""
-    graph: BaseGraphSchema
+    graph: Union[NetatmoGraphSchema, BaseGraphSchema]
     """Graph configuration."""
     model: ModelSchema
     """Model configuration."""

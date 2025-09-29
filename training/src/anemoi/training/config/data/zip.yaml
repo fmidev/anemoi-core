@@ -1,0 +1,58 @@
+_target_: anemoi.training.data.dataset.zipdataset.ZipDataset
+format: zarr
+frequency: 6h
+timestep: 6h
+
+zip:
+- forcing:
+  - "cos_latitude"
+  - "cos_longitude"
+  - "sin_latitude"
+  - "sin_longitude"
+  - "cos_julian_day"
+  - "cos_local_time"
+  - "sin_julian_day"
+  - "sin_local_time"
+  - "insolation"
+  - "lsm"
+  - "z"
+
+  diagnostic:
+  - tp
+
+  remapped:
+
+  normalizer:
+    default: "mean-std"
+    std:
+    - "tp"
+
+    min-max:
+    max:
+    - "z"
+    none:
+    - "cos_latitude"
+    - "cos_longitude"
+    - "sin_latitude"
+    - "sin_longitude"
+    - "cos_julian_day"
+    - "cos_local_time"
+    - "sin_julian_day"
+    - "sin_local_time"
+    - "insolation"
+    - "lsm"
+
+  imputer:
+    default: "none"
+  remapper:
+    default: "none"
+
+  processors:
+    normalizer:
+      _target_: anemoi.models.preprocessing.normalizer.InputNormalizer
+      config: ${data.zip.0.normalizer}
+
+
+# set in code
+num_features: null
+

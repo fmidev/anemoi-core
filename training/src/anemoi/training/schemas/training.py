@@ -326,13 +326,13 @@ class BaseTrainingSchema(BaseModel):
     "Strategy to use."
     swa: SWA = Field(default_factory=SWA)
     "Config for stochastic weight averaging."
-    training_loss: LossSchemas
+    training_loss: Union[LossSchemas, list[LossSchemas]]
     "Training loss configuration."
     loss_gradient_scaling: bool = False
     "Dynamic rescaling of the loss gradient. Not yet tested."
     scalers: dict[str, ScalerSchema]
     "Scalers to use in the computation of the loss and validation scores."
-    validation_metrics: dict[str, LossSchemas]
+    validation_metrics: Union[dict[str, LossSchemas], list[LossSchemas]]
     "List of validation metrics configurations."
     variable_groups: dict[str, Union[str, list[str]]]
     "Groups for variable loss scaling"
@@ -348,10 +348,25 @@ class BaseTrainingSchema(BaseModel):
     "Optimizer configuration."
     metrics: list[str]
     "List of metrics"
+    # Additional fields for custom implementations
+    train_module: Union[str, None] = Field(default=None)
+    "Training module for custom forecaster implementations."
+    train_function: Union[str, None] = Field(default=None)
+    "Training function for custom forecaster implementations."
+    dataset_loss_scaling: Union[list[float], None] = Field(default=None)
+    "Dataset-specific loss scaling factors."
+    transfer_learning_with_layer_dict: Union[bool, None] = Field(default=None)
+    "Enable transfer learning with layer dictionary mapping."
+    layer_dict: Union[dict[str, str], None] = Field(default=None)
+    "Layer dictionary for transfer learning mapping."
 
 
 class ForecasterSchema(BaseTrainingSchema):
-    model_task: Literal["anemoi.training.train.forecaster.GraphForecaster",] = Field(..., alias="model_task")
+    model_task: Literal[
+        "anemoi.training.train.forecaster.GraphForecaster",
+        "anemoi.training.train.forecaster.NetatmoGraphForecaster",
+        "anemoi.training.train.forecaster.AnemoiObsFuser",
+    ] = Field(..., alias="model_task")
     "Training objective."
 
 
@@ -371,4 +386,4 @@ class InterpolationSchema(BaseTrainingSchema):
     "Forcing parameters for target output times."
 
 
-TrainingSchema = Union[ForecasterSchema, ForecasterEnsSchema, InterpolationSchema]
+TrainingSchema = Annotated[Union[ForecasterSchema, ForecasterEnsSchema, InterpolationSchema], Field(discriminator="model_task")]

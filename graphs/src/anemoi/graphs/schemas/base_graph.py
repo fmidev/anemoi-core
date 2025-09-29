@@ -53,11 +53,17 @@ class BaseGraphSchema(PydanticBaseModel):
     overwrite: bool = Field(example=True)
     "whether to overwrite existing graph file. Default to True."
     post_processors: list[ProcessorSchemas] = Field(default_factory=list)
-    data: str = Field(example="data")
+    data: Union[str, None] = Field(default=None, example="data")
     "Key name for the data nodes. Default to 'data'."
     hidden: Union[str, list[str]] = Field(example="hidden")
     "Key name for the hidden nodes. Default to 'hidden'."
     # TODO(Helen): Needs to be adjusted for more complex graph setups
+
+
+class NetatmoGraphSchema(BaseGraphSchema):
+    """Graph schema specifically for Netatmo graphs with input_nodes support."""
+    input_nodes: dict[str, str] = Field(description="Dictionary mapping input node names to their identifiers.")
+    "Dictionary mapping input node names to their identifiers."
 
     @model_validator(mode="after")
     def check_if_nodes_edges_present_if_overwrite(self) -> BaseGraphSchema:

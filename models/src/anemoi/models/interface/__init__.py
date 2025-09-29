@@ -20,6 +20,7 @@ from anemoi.models.distributed.graph import shard_tensor
 from anemoi.models.distributed.shapes import apply_shard_shapes
 from anemoi.models.distributed.shapes import get_shard_shapes
 from anemoi.models.preprocessing import Processors
+from anemoi.models.preprocessing import ZipProcessors
 from anemoi.utils.config import DotDict
 
 
@@ -148,3 +149,118 @@ class AnemoiModelInterface(torch.nn.Module):
                 y_hat = gather_tensor(y_hat, -2, apply_shard_shapes(y_hat, -2, grid_shard_shapes), model_comm_group)
 
         return y_hat
+
+
+class FuserModelInterface(torch.nn.Module):
+    """An interface for multi-dataset Anemoi models.
+
+    This class is a wrapper around the Anemoi model that includes pre-processing and post-processing steps
+    for multiple datasets (zipped together). It inherits from the PyTorch Module class.
+
+    Attributes
+    ----------
+    config : DotDict
+        Configuration settings for the model.
+    id : str
+        A unique identifier for the model instance.
+    multi_step : bool
+        Whether the model uses multi-step input.
+    graph_data : HeteroData
+        Graph data for the model.
+    statistics : dict
+        Statistics for the data.
+    metadata : dict
+        Metadata for the model.
+    supporting_arrays : dict
+        Numpy arrays to store in the checkpoint.
+    data_indices : dict
+        Indices for the data.
+    pre_processors : ZipProcessors
+        Pre-processing steps to apply to the data before passing it to the model.
+    post_processors : ZipProcessors
+        Post-processing steps to apply to the model's output.
+    model : AnemoiObsFuser
+        The underlying Anemoi model.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: DotDict,
+        graph_data: HeteroData,
+        statistics: dict,
+        data_indices: tuple,
+        metadata: dict,
+        supporting_arrays: dict | None = None,
+        truncation_data: dict | None = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.id = str(uuid.uuid4())
+        self.multi_step = self.config.training.multistep_input
+        self.graph_data = graph_data
+        self.statistics = statistics
+        self.truncation_data = truncation_data
+        self.metadata = metadata
+        self.data_indices = data_indices
+        self.supporting_arrays = (
+            supporting_arrays if supporting_arrays is not None else {}
+        )
+        self._build_model()
+
+    def _build_model(self) -> None:
+        """Builds the model and pre- and post-processors."""
+        assert isinstance(self.data_indices, tuple), f"data_indices must be a tuple, got {type(self.data_indices)}"
+
+        processors = tuple(
+            [
+                [
+                    name,
+                    instantiate(
+                        processor,
+                        data_indices=self.data_indices[i],
+                        statistics=self.statistics[i],
+                    ),
+                ]
+                for name, processor in dset_config.processors.items()
+            ]
+            for i, dset_config in enumerate(self.config.data.zip)
+        )
+
+        self.pre_processors = ZipProcessors(processors)
+        self.post_processors = ZipProcessors(processors, inverse=True)
+
+        self.model = instantiate(
+            self.config.model.model,
+            model_config=self.config,
+            data_indices=self.data_indices,
+            graph_data=self.graph_data,
+            statistics=self.statistics,
+            truncation_data=self.truncation_data,
+            _recursive_=False,
+        )
+        self.forward = self.model.forward
+
+    def predict_step(self, batch: torch.Tensor,model_comm_group: Optional[ProcessGroup] = None, gather_out: bool = True, **kwargs) -> list[torch.Tensor]:
+        """Prediction step for the model.
+
+        Parameters
+        ----------
+        batch : torch.Tensor
+            Input batched data.
+
+        Returns
+        -------
+        torch.Tensor
+            Predicted data.
+        """
+        batch = self.pre_processors(batch, in_place=False)
+        with torch.no_grad():
+            assert (
+                len(batch[0].shape) == 4
+            ), f"The input tensor has an incorrect shape: expected a 4-dimensional tensor, got {batch.shape}!"
+            x = tuple(
+                batch_elem[:, 0 : self.multi_step, None, ...] for batch_elem in batch
+            )
+            y_hat = self(x)
+        return self.post_processors(y_hat, in_place=False)

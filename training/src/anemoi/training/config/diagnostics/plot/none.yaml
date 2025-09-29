@@ -1,0 +1,19 @@
+callbacks: []
+
+asynchronous: True # Whether to plot asynchronously
+datashader: True # Choose which technique to use for plotting
+frequency: 
+  batch: 7500000
+  epoch: 100000
+
+# Parameters to plot
+parameters: []
+
+# Sample index
+sample_idx: 0
+
+# Precipitation and related fields
+precip_and_related_fields: []
+
+# select special colormap for precip fields
+colormaps: {}

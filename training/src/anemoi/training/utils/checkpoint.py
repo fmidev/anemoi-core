@@ -95,6 +95,31 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
     return model
 
 
+def transfer_learning_loading_with_layer_dict(
+    model: torch.nn.Module,
+    ckpt_path: Path | str,
+    layer_dict: dict,
+) -> nn.Module:
+    checkpoint = torch.load(ckpt_path, map_location=model.device)
+    state_dict = checkpoint["state_dict"]
+
+    for mname, mparameter in model.named_parameters():
+        cname = mname
+        for old_name, new_name in layer_dict.items():
+            if new_name in cname:
+                cname = mname.replace(new_name, old_name)
+
+        if cname in state_dict:
+            LOGGER.info(f"Replacing layer {mname} in model with layer {cname} from old checkpoint")
+            mparameter.data = state_dict[cname].data
+        else:
+            LOGGER.info(f"Layer {cname} not found in checkpoint")
+
+    # Needed for data indices check
+    model._ckpt_model_name_to_index = checkpoint["hyper_parameters"]["data_indices"].name_to_index
+    return model
+
+
 def freeze_submodule_by_name(module: nn.Module, target_name: str) -> None:
     """Recursively freezes the parameters of a submodule with the specified name.
 
@@ -108,8 +133,9 @@ def freeze_submodule_by_name(module: nn.Module, target_name: str) -> None:
     for name, child in module.named_children():
         # If this is the target submodule, freeze its parameters
         if name == target_name:
-            for param in child.parameters():
+            for param_path, param in child.named_parameters():
                 param.requires_grad = False
+                LOGGER.info(f"freezing submodule {name}.{param_path}")
         else:
             # Recursively search within children
             freeze_submodule_by_name(child, target_name)

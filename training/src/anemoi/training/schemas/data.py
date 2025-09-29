@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 from typing import Union
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -81,6 +82,30 @@ class PreprocessorSchema(BaseModel):
         return self
 
 
+class SingleDataSchema(PydanticBaseModel):
+    processors: dict[str, PreprocessorSchema]
+    "Layers of model performing computation on latent space. \
+            Processors including imputers and normalizers are applied in order of definition."
+    forcing: list[str]
+    "Features that are not part of the forecast state but are used as forcing to generate the forecast state."
+    diagnostic: list[str]
+    "Features that are only part of the forecast state and are not used as an input to the model."
+
+
+class ZipDataSchema(PydanticBaseModel):
+    target_: Literal["anemoi.training.data.dataset.zipdataset.ZipDataset"] = Field(..., alias="_target_")
+    format: str = Field(example=None)
+    "Format of the data."
+    frequency: str = Field(example=None)
+    "Time frequency requested from the dataset."
+    timestep: str = Field(example=None)
+    "Time step of model (must be multiple of frequency)."
+    zip: list[SingleDataSchema]
+    "List of dataset configurations for zip datamodule."
+    num_features: Union[int, None]
+    "Number of features in the forecast state. To be set in the code."
+
+
 class DataSchema(PydanticBaseModel):
     """A class used to represent the overall configuration of the dataset.
 
@@ -104,6 +129,7 @@ class DataSchema(PydanticBaseModel):
         The number of features in the forecast state. To be set in the code.
     """
 
+    target_: Literal["anemoi.training.data.dataset.singledataset.NativeGridDataset"] = Field(..., alias="_target_")
     format: str = Field(example=None)
     "Format of the data."
     frequency: str = Field(example=None)

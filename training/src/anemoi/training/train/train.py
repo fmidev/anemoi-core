@@ -228,7 +228,11 @@ class AnemoiTrainer:
 
             model.data_indices = self.data_indices
             # check data indices in original checkpoint and current data indices are the same
-            self.data_indices.compare_variables(model._ckpt_model_name_to_index, self.data_indices.name_to_index)
+            if isinstance(self.data_indices, (tuple, list)):
+                # We only check for dataset 0 as the checkpoint does not contain the data indices for the other datasets
+                self.data_indices[0].compare_variables(model._ckpt_model_name_to_index, self.data_indices[0].name_to_index)
+            else:
+                self.data_indices.compare_variables(model._ckpt_model_name_to_index, self.data_indices.name_to_index)
 
         if hasattr(self.config.training, "submodules_to_freeze"):
             # Freeze the chosen model weights
@@ -386,9 +390,17 @@ class AnemoiTrainer:
 
     def _log_information(self) -> None:
         # Log number of variables (features)
-        num_fc_features = len(self.datamodule.ds_train.data.variables) - len(self.config.data.forcing)
+        # Handle both single dataset and zip dataset configurations
+        if hasattr(self.config.data, 'zip'):
+            # For zip datasets, use the first dataset's forcing
+            forcing = self.config.data.zip[0].forcing
+        else:
+            # For single datasets, use the direct forcing
+            forcing = self.config.data.forcing
+
+        num_fc_features = len(self.datamodule.ds_train.data.variables) - len(forcing)
         LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
-        LOGGER.debug("Total number of auxiliary variables: %d", len(self.config.data.forcing))
+        LOGGER.debug("Total number of auxiliary variables: %d", len(forcing))
 
         # Log learning rate multiplier when running single-node, multi-GPU and/or multi-node
         total_number_of_model_instances = (

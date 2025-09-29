@@ -44,6 +44,7 @@ class DefinedModels(str, Enum):
     ANEMOI_MODEL_ENC_HIERPROC_DEC_SHORT = "anemoi.models.models.AnemoiModelEncProcDecHierarchical"
     ANEMOI_MODEL_INTERPENC_PROC_DEC = "anemoi.models.models.interpolator.AnemoiModelEncProcDecInterpolator"
     ANEMOI_MODEL_INTERPENC_PROC_DEC_SHORT = "anemoi.models.models.AnemoiModelEncProcDecInterpolator"
+    ANEMOI_OBS_FUSER = "anemoi.models.models.obsfuser.AnemoiObsFuser"
 
 
 class Model(BaseModel):
@@ -154,7 +155,7 @@ class Boolean1DSchema(BaseModel):
     attribute_name: str = Field(example="cutout_mask")
 
 
-OutputMaskSchemas = Union[NoOutputMaskSchema, Boolean1DSchema]
+OutputMaskSchemas = Annotated[Union[NoOutputMaskSchema, Boolean1DSchema], Field(discriminator="target_")]
 
 
 class BaseModelSchema(PydanticBaseModel):
@@ -166,7 +167,7 @@ class BaseModelSchema(PydanticBaseModel):
     "Model schema."
     trainable_parameters: TrainableParameters = Field(default_factory=TrainableParameters)
     "Learnable node and edge parameters."
-    bounding: list[Bounding]
+    bounding: Union[list[Bounding], list[list[Bounding]]]
     "List of bounding configuration applied in order to the specified variables."
     output_mask: OutputMaskSchemas  # !TODO CHECK!
     "Output mask"
@@ -179,13 +180,13 @@ class BaseModelSchema(PydanticBaseModel):
         discriminator="target_",
     )
     "GNN processor schema."
-    encoder: Union[GNNEncoderSchema, GraphTransformerEncoderSchema, TransformerEncoderSchema] = Field(
-        ...,
+    encoder: Union[GNNEncoderSchema, GraphTransformerEncoderSchema, TransformerEncoderSchema, None] = Field(
+        default=None,
         discriminator="target_",
     )
     "GNN encoder schema."
-    decoder: Union[GNNDecoderSchema, GraphTransformerDecoderSchema, TransformerDecoderSchema] = Field(
-        ...,
+    decoder: Union[GNNDecoderSchema, GraphTransformerDecoderSchema, TransformerDecoderSchema, None] = Field(
+        default=None,
         discriminator="target_",
     )
     "GNN decoder schema."
@@ -211,4 +212,16 @@ class EnsModelSchema(BaseModelSchema):
     "Settings related to custom kernels for encoder processor and decoder blocks"
 
 
-ModelSchema = Union[BaseModelSchema, EnsModelSchema]
+class ObsFuserModelSchema(BaseModelSchema):
+    use_obs_fuser: bool = Field(default=False)
+    encoder_data: GraphTransformerEncoderSchema
+    "Data encoder schema."
+    encoder_obs: GraphTransformerEncoderSchema
+    "Observation encoder schema."
+    decoder_data: GraphTransformerDecoderSchema
+    "Data decoder schema."
+    decoder_obs: GraphTransformerDecoderSchema
+    "Observation decoder schema."
+
+
+ModelSchema = Union[BaseModelSchema, EnsModelSchema, ObsFuserModelSchema]

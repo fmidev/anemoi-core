@@ -1,0 +1,100 @@
+# Several scalers can be added here. In order to be applied their names must be included in the loss.
+# scaler name must be included in `scalers` in the losses for this to be applied.
+general_variable:
+  # Variable groups definition for scaling by variable level.
+  # The variable level scaling methods are defined under additional_scalers
+  # A default group is required and is appended as prefix to the metric of all variables not assigned to a group.
+  _target_: anemoi.training.losses.scalers.GeneralVariableLossScaler
+  weights:
+    default: 1
+    q: 0.6 #1
+    t: 6   #1
+    u: 0.8 #0.5
+    v: 0.5 #0.33
+    w: 0.001
+    z: 12  #1
+    sp: 10
+    10u: 0.1
+    10v: 0.1
+    2d: 0.5
+    tp: 0.025
+    cp: 0.0025
+
+pressure_level:
+  _target_: anemoi.training.losses.scalers.ReluVariableLevelScaler
+  group: pl
+  y_intercept: 0.2
+  slope: 0.001
+
+# mask NaNs with zeros in the loss function
+nan_mask_weights:
+  _target_: anemoi.training.losses.scalers.NaNMaskScaler
+
+# tendency scalers
+# scale the prognostic losses by the stdev of the variable tendencies (e.g. the 6-hourly differences of the data)
+# useful if including slow vs fast evolving variables in the training (e.g. Land/Ocean vs Atmosphere)
+# if using this option 'variable_loss_scalings' should all be set close to 1.0 for prognostic variables
+stdev_tendency:
+  _target_: anemoi.training.losses.scalers.StdevTendencyScaler
+
+var_tendency:
+  _target_: anemoi.training.losses.scalers.VarTendencyScaler
+
+# Scalers from node attributes
+# Purpose: "Land areas matter more than ocean, but rebalanced"
+# Uses: area_weight attribute from graph nodes
+# Mask: cutout_mask (only applies to cutout region, not global domain)
+# Type: ReweightedGraphNodeAttributeScaler → redistributes weights
+# Effect: Takes natural area weights, but ensures cutout region gets weight_frac_of_total of total importance
+
+data_node_weights:
+  _target_: anemoi.training.losses.scalers.ReweightedGraphNodeAttributeScaler
+  nodes_name: ${graph.input_nodes.data}
+  nodes_attribute_name: area_weight
+  scaling_mask_attribute_name: cutout_mask
+  weight_frac_of_total: 0.33 #from Bris article, 0.25 default
+  norm: "unit-sum"
+
+netatmo_node_weights:
+  _target_: anemoi.training.losses.scalers.GraphNodeAttributeScaler
+  nodes_name: ${graph.input_nodes.netatmo}
+  nodes_attribute_name: area_weight
+  norm: "unit-sum"
+
+#node_weights:
+#  _target_: anemoi.training.losses.scalers.ReweightedGraphNodeAttributeScaler
+#  nodes_name: ${graph.data}
+#  nodes_attribute_name: area_weight
+#  scaling_mask_attribute_name: cutout_mask
+#  weight_frac_of_total: ???
+#  norm: "unit-sum"
+
+# Purpose: "Limited Area Model nodes have special importance"
+# Uses: lam_area_weight attribute (likely higher for LAM boundary regions)
+# Norm: unit-sum → all weights sum to 1
+# Effect: Emphasizes LAM boundary/interface regions where global→local coupling matters
+lam_node_weights:
+  _target_: anemoi.training.losses.scalers.GraphNodeAttributeScaler
+  nodes_name: ${graph.input_nodes.data}
+  nodes_attribute_name: lam_area_weight
+  norm: "unit-sum"
+
+# Purpose: "Only care about errors inside the limited area domain"
+# Uses: cutout_mask (1 inside domain, 0 outside)
+# Norm: null → uses raw 0/1 values
+# Effect: Completely ignores errors outside the cutout region
+limited_area_mask:
+  _target_: anemoi.training.losses.scalers.GraphNodeAttributeScaler
+  nodes_name: ${graph.input_nodes.data}
+  nodes_attribute_name: cutout_mask
+  norm: null
+
+# Purpose: "Only care about errors outside the core LAM region"
+# Uses: boundary_mask (inverse of cutout_mask)
+# Effect: Focuses on boundary/transition zones, ignores LAM interior
+outside_lam_mask:
+  _target_: anemoi.training.losses.scalers.GraphNodeAttributeScaler
+  nodes_name: ${graph.input_nodes.data}
+  nodes_attribute_name: boundary_mask
+  norm: null
+

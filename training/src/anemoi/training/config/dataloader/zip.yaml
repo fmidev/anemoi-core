@@ -1,0 +1,58 @@
+prefetch_factor: 1
+pin_memory: True
+
+read_group_size: ${hardware.num_gpus_per_model}
+
+grid_indices:
+  _target_: anemoi.training.data.grid_indices.FullGrid
+  nodes_name: ${graph.input_nodes.data}
+
+num_workers:
+  training: 8
+  validation: 8
+  test: 8
+batch_size:
+  training: 2
+  validation: 4
+  test: 4
+
+limit_batches:
+  training: null
+  validation: null
+  test: 20
+
+dataset_data:
+  cutout:
+  - dataset: ${hardware.paths.data}${hardware.files.dataset_lam}
+  - dataset: ${hardware.paths.data}${hardware.files.dataset}
+  adjust: all
+
+dataset_obs:
+  dataset: ${hardware.paths.data}${hardware.files.dataset_obs}
+
+dataset:
+  zip:
+    - ${dataloader.dataset_data}
+    - ${dataloader.dataset_obs}
+  adjust: ["start", "end"]
+
+training:
+  dataset: ${dataloader.dataset}
+  start: null
+  end: 2020
+  frequency: ${data.frequency}
+
+validation_rollout: 1
+
+validation:
+  dataset: ${dataloader.dataset}
+  start: 2021
+  end: 2021
+  frequency: ${data.frequency}
+
+test:
+  dataset: ${dataloader.dataset}
+  start: 2022
+  end: null
+  frequency: ${data.frequency}
+
