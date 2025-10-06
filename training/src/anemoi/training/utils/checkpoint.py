@@ -88,32 +88,12 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
 
             del state_dict[key]  # Remove the mismatched key
 
-    # Load the filtered st-ate_dict into the model
-    model.load_state_dict(state_dict, strict=False)
-    # Needed for data indices check
-    model._ckpt_model_name_to_index = checkpoint["hyper_parameters"]["data_indices"].name_to_index
-    return model
-
-
-def transfer_learning_loading_with_layer_dict(
-    model: torch.nn.Module,
-    ckpt_path: Path | str,
-    layer_dict: dict,
-) -> nn.Module:
-    checkpoint = torch.load(ckpt_path, map_location=model.device)
-    state_dict = checkpoint["state_dict"]
-
-    for mname, mparameter in model.named_parameters():
-        cname = mname
-        for old_name, new_name in layer_dict.items():
-            if new_name in cname:
-                cname = mname.replace(new_name, old_name)
-
-        if cname in state_dict:
-            LOGGER.info(f"Replacing layer {mname} in model with layer {cname} from old checkpoint")
-            mparameter.data = state_dict[cname].data
-        else:
-            LOGGER.info(f"Layer {cname} not found in checkpoint")
+    # Load the filtered state_dict into the model
+    result = model.load_state_dict(state_dict, strict=False)
+    for layer in result.missing_keys:
+        LOGGER.info(f"Missing layer when loading state dict: {layer}")
+    for layer in result.unexpected_keys:
+        LOGGER.info(f"Unexpected layer when loading state dict: {layer}")
 
     # Needed for data indices check
     model._ckpt_model_name_to_index = checkpoint["hyper_parameters"]["data_indices"].name_to_index

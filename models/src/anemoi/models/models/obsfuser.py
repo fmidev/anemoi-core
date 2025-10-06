@@ -83,8 +83,8 @@ class AnemoiObsFuser(nn.Module):
             for dset_idx, dset in enumerate(self._graph_names_data)
         )
 
-        self.encoder_data = instantiate(
-            model_config.model.encoder_data,
+        self.encoder = instantiate(
+            model_config.model.encoder,
             _recursive_=False,  # Avoids instantiation of layer_kernels here
             in_channels_src=input_dim[0],
             in_channels_dst=self.node_attributes.attr_ndims[self._graph_name_hidden],
@@ -121,8 +121,8 @@ class AnemoiObsFuser(nn.Module):
             dst_grid_size=self.node_attributes.num_nodes[self._graph_name_hidden],
         )
 
-        self.decoder_data = instantiate(
-            model_config.model.decoder_data,
+        self.decoder = instantiate(
+            model_config.model.decoder,
             _recursive_=False,  # Avoids instantiation of layer_kernels here
             in_channels_src=self.num_channels,
             in_channels_dst=input_dim[0],
@@ -133,10 +133,10 @@ class AnemoiObsFuser(nn.Module):
             dst_grid_size=self.node_attributes.num_nodes[self._graph_names_data[0]],
         )
 
-        self.decoders_obs = nn.ModuleList(
+        self.decoders_extra = nn.ModuleList(
             [
                 instantiate(
-                    model_config.model.decoder_obs,
+                    model_config.model.decoder_extra,
                     _recursive_=False,  # Avoids instantiation of layer_kernels here
                     in_channels_src=self.num_channels,
                     in_channels_dst=input_dim[dset_idx],
@@ -348,7 +348,7 @@ class AnemoiObsFuser(nn.Module):
         shard_shapes_hidden = get_shard_shapes(x_hidden_latent, 0, model_comm_group)
         
         x_data_latent, x_latent = self._run_mapper(
-            self.encoder_data,
+            self.encoder,
             (x_data_latent, x_hidden_latent),
             batch_size=batch_size,
             shard_shapes=(shard_shapes_data, shard_shapes_hidden),
@@ -384,7 +384,7 @@ class AnemoiObsFuser(nn.Module):
         x_out = [None for _ in range(len(x))]
 
         x_out[0] = self._run_mapper(
-            self.decoder_data,
+            self.decoder,
             (x_latent_proc, x_data_latent),
             batch_size=batch_size,
             shard_shapes=(shard_shapes_hidden, shard_shapes_data),
@@ -394,9 +394,9 @@ class AnemoiObsFuser(nn.Module):
             keep_x_dst_sharded=in_out_sharded,  # keep x_out sharded iff in_out_sharded
         )
 
-        for dset, obs_decoder in enumerate(self.decoders_obs):
+        for dset, decoder_extra in enumerate(self.decoders_extra):
             x_out[dset + 1] = self._run_mapper(
-                obs_decoder,
+                decoder_extra,
                 (x_latent_proc, x_obs_latent[dset]),
                 batch_size=batch_size,
                 shard_shapes=(shard_shapes_hidden, shard_shapes_obs[dset]),

@@ -214,13 +214,7 @@ class EnsModelSchema(BaseModelSchema):
 
 class ObsFuserModelSchema(BaseModelSchema):
     use_obs_fuser: bool = Field(default=False)
-    encoder_data: GraphTransformerEncoderSchema
-    "Data encoder schema."
-    encoder_obs: GraphTransformerEncoderSchema
-    "Observation encoder schema."
-    decoder_data: GraphTransformerDecoderSchema
-    "Data decoder schema."
-    decoder_obs: GraphTransformerDecoderSchema
+    decoder_extra: GraphTransformerDecoderSchema
     "Observation decoder schema."
 
 

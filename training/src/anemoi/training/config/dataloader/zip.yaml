@@ -27,13 +27,13 @@ dataset_data:
   - dataset: ${hardware.paths.data}${hardware.files.dataset}
   adjust: all
 
-dataset_obs:
-  dataset: ${hardware.paths.data}${hardware.files.dataset_obs}
+dataset_extra:
+  dataset: ${hardware.paths.data}${hardware.files.dataset_extra}
 
 dataset:
   zip:
     - ${dataloader.dataset_data}
-    - ${dataloader.dataset_obs}
+    - ${dataloader.dataset_extra}
   adjust: ["start", "end"]
 
 training:

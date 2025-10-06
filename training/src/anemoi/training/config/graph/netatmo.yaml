@@ -5,6 +5,7 @@ input_nodes:
   data: "data"
   netatmo: "netatmo"
 
+data: ${graph.input_nodes.data} # compatibility with "normal" graphs
 hidden: "hidden"
 
 nodes:
@@ -16,7 +17,7 @@ nodes:
   netatmo:
     node_builder:
       _target_: anemoi.graphs.nodes.ZarrDatasetNodes
-      dataset: ${dataloader.dataset_obs}
+      dataset: ${dataloader.dataset_extra}
     attributes:
       area_weight:
         _target_: anemoi.graphs.nodes.attributes.UniformWeights

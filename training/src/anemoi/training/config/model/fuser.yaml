@@ -33,7 +33,7 @@ processor:
   cpu_offload: ${model.cpu_offload}
   layer_kernels: ${model.layer_kernels}
 
-encoder_data:
+encoder:
   _target_: anemoi.models.layers.mapper.GraphTransformerForwardMapper
   trainable_size: ${model.trainable_parameters.data2hidden}
   sub_graph_edge_attributes: ${model.attributes.edges}
@@ -44,18 +44,18 @@ encoder_data:
   cpu_offload: ${model.cpu_offload}
   layer_kernels: ${model.layer_kernels}
 
-encoder_obs:
-  _target_: anemoi.models.layers.mapper.GraphTransformerForwardMapper
-  trainable_size: ${model.trainable_parameters.data2hidden}
-  sub_graph_edge_attributes: ${model.attributes.edges}
-  num_chunks: 1
-  mlp_hidden_ratio: 4
-  num_heads: 16
-  qk_norm: False
-  cpu_offload: ${model.cpu_offload}
-  layer_kernels: ${model.layer_kernels}
+#encoder_obs:
+#  _target_: anemoi.models.layers.mapper.GraphTransformerForwardMapper
+#  trainable_size: ${model.trainable_parameters.data2hidden}
+#  sub_graph_edge_attributes: ${model.attributes.edges}
+#  num_chunks: 1
+#  mlp_hidden_ratio: 4
+#  num_heads: 16
+#  qk_norm: False
+#  cpu_offload: ${model.cpu_offload}
+# layer_kernels: ${model.layer_kernels}
 
-decoder_data:
+decoder:
   _target_: anemoi.models.layers.mapper.GraphTransformerBackwardMapper
   trainable_size: ${model.trainable_parameters.hidden2data}
   sub_graph_edge_attributes: ${model.attributes.edges}
@@ -67,7 +67,7 @@ decoder_data:
   cpu_offload: ${model.cpu_offload}
   layer_kernels: ${model.layer_kernels}
 
-decoder_obs:
+decoder_extra:
   _target_: anemoi.models.layers.mapper.GraphTransformerBackwardMapper
   trainable_size: ${model.trainable_parameters.hidden2data}
   sub_graph_edge_attributes: ${model.attributes.edges}

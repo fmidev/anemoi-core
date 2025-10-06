@@ -209,8 +209,21 @@ class ZipProcessors(nn.Module):
         """
         super().__init__()
         self.inverse = inverse
-        processors = [Processors(processors, inverse=inverse) for processors in processors_zip]
-        self.processors = nn.ModuleList(processors)
+        self.first_run = True
+
+        # First processor (for checkpoint compatibility)
+        self.processors = nn.ModuleDict(processors_zip[0])
+
+        # Additional processors
+        if len(processors_zip) > 1:
+            self.processors_extra = nn.ModuleList([
+                Processors(processors, inverse=inverse)
+                for processors in processors_zip[1:]
+            ])
+
+    def __repr__(self) -> str:
+        extra_info = f", {len(self.processors_extra)} extra" if hasattr(self, 'processors_extra') else ""
+        return f"{self.__class__.__name__} [{'inverse' if self.inverse else 'forward'}]({self.processors}{extra_info})"
 
     def forward(self, x: tuple, in_place: bool = True) -> tuple:
         """Process the input tuple of tensors.
@@ -227,13 +240,28 @@ class ZipProcessors(nn.Module):
         tuple
             Processed tuple of tensors
         """
-        assert isinstance(x, list), f"x is not a list, but {type(x)}"
-        if not in_place:
-            y = ()
-            for i, processor in enumerate(self.processors):
-                y += (processor(x[i], in_place=False),)
-            return y
-        else:
-            for i, processor in enumerate(self.processors):
-                x[i] = processor(x[i], in_place=True)
-            return x
+
+        y = list(x) if not in_place else x
+
+        # Process first dataset with self.processors (checkpoint compatible)
+        for p in self.processors.values():
+            y[0] = p(y[0], in_place=in_place, inverse=self.inverse)
+
+        # Process additional datasets with self.processors_extra
+        if hasattr(self, 'processors_extra'):
+            for i, processor in enumerate(self.processors_extra, 1):
+                y[i] = processor(y[i], in_place=in_place)
+
+        if self.first_run:
+            self.first_run = False
+            self._run_checks(y[0])  # Run checks on first processed tensor
+
+        return tuple(y) if not in_place else y
+
+    def _run_checks(self, x):
+        """Run checks on the processed tensor."""
+        if not self.inverse:
+            # Forward transformation checks:
+            assert not torch.isnan(
+                x
+            ).any(), f"NaNs ({torch.isnan(x).sum()}) found in processed tensor after {self.__class__.__name__}."
