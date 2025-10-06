@@ -512,6 +512,10 @@ class AnemoiTrainer:
             enable_progress_bar=self.config.diagnostics.enable_progress_bar,
         )
 
+        # Disable debug, log and warning level logging for ranks not zero
+        if trainer.global_rank != 0:
+            logging.getLogger().setLevel(logging.ERROR)
+
         LOGGER.debug("Starting training..")
         trainer.fit(
             self.model,
