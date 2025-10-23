@@ -332,7 +332,7 @@ class BaseTrainingSchema(BaseModel):
     "Dynamic rescaling of the loss gradient. Not yet tested."
     scalers: dict[str, ScalerSchema]
     "Scalers to use in the computation of the loss and validation scores."
-    validation_metrics: Union[dict[str, LossSchemas], list[LossSchemas]]
+    validation_metrics: Union[dict[str, LossSchemas], list[LossSchemas], list[dict[str, LossSchemas]]]
     "List of validation metrics configurations."
     variable_groups: dict[str, Union[str, list[str]]]
     "Groups for variable loss scaling"

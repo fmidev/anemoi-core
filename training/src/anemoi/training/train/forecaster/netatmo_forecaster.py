@@ -116,7 +116,7 @@ class NetatmoGraphForecaster(pl.LightningModule):
 
         # Create validation metrics for each dataset
         zip_metrics = []
-        for dset, metrics_config in enumerate(config.training.validation_metrics):
+        for dset, metrics_dict in enumerate(config.model_dump(by_alias=True).training.validation_metrics):
             # Create scalers for this dataset's metrics
             scalers_result = create_scalers(
                 config.model_dump(by_alias=True).training.scalers,
@@ -129,15 +129,18 @@ class NetatmoGraphForecaster(pl.LightningModule):
                 output_mask=self.output_mask,
             )
             scalers_dict = scalers_result[0] if isinstance(scalers_result, (tuple, list)) else scalers_result
-            metrics_config = config.model_dump(by_alias=True).training.validation_metrics[dset]
-            metric = get_loss_function(
-                metrics_config,
-                scalers=scalers_dict,
-                data_indices=data_indices[dset],
-            )
-            zip_metrics.append(metric)
 
-        self.metrics = ZipLoss(zip_metrics)
+            dataset_metrics = torch.nn.ModuleDict({
+                metric_name: get_loss_function(
+                    val_metric_config,
+                    scalers=scalers_dict,
+                    data_indices=data_indices[dset],
+                )
+                for metric_name, val_metric_config in metrics_dict.items()
+            })
+            zip_metrics.append(dataset_metrics)
+
+        self.metrics = zip_metrics
 
         self.multi_step = config.training.multistep_input
         self.lr = (
@@ -323,31 +326,32 @@ class NetatmoGraphForecaster(pl.LightningModule):
         y_postprocessed = self.model.post_processors(y, in_place=False)
         y_pred_postprocessed = self.model.post_processors(y_pred, in_place=False)
 
-        for dset, metric in enumerate(self.metrics.losses):
-            metric_name = getattr(metric, "name", metric.__class__.__name__.lower())
-            if not isinstance(metric, BaseLoss):
-                metrics[dset][f"{metric_name}/{rollout_step + 1}"] = metric(
-                    y_pred_postprocessed[dset],
-                    y_postprocessed[dset],
-                )
-                continue
-            for mkey, indices in self.val_metric_ranges[dset].items():
-                metric_step_name = f"{metric_name}_metric/{mkey}/{rollout_step + 1}"
-
-                if len(metric.scaler.subset_by_dim(TensorDim.VARIABLE.value)):
-                    exception_msg = (
-                        "Validation metrics cannot be scaled over the variable dimension"
-                        " in the post processed space."
+        for dset, dataset_metrics in enumerate(self.metrics):
+            for metric_name, metric in dataset_metrics.items():
+                if not isinstance(metric, BaseLoss):
+                    # If not a loss, we cannot feature scale, so call normally
+                    metrics[dset][f"{metric_name}_metric/{rollout_step + 1}"] = metric(
+                        y_pred_postprocessed[dset],
+                        y_postprocessed[dset],
                     )
-                    raise ValueError(exception_msg)
+                    continue
 
-                metrics[dset][metric_step_name] = metric(
-                    y_pred_postprocessed[dset],
-                    y_postprocessed[dset],
-                    scaler_indices=[..., indices],
-                    grid_shard_slice=grid_shard_slice,
-                    group=self.model_comm_group,
-                )
+                for mkey, indices in self.val_metric_ranges[dset].items():
+                    metric_step_name = f"{metric_name}_metric/{mkey}/{rollout_step + 1}"
+                    if len(metric.scaler.subset_by_dim(TensorDim.VARIABLE.value)):
+                        exception_msg = (
+                            "Validation metrics cannot be scaled over the variable dimension"
+                            " in the post processed space."
+                        )
+                        raise ValueError(exception_msg)
+
+                    metrics[dset][metric_step_name] = metric(
+                        y_pred_postprocessed[dset],
+                        y_postprocessed[dset],
+                        scaler_indices=[..., indices],
+                        grid_shard_slice=grid_shard_slice,
+                        group=self.model_comm_group,
+                    )
 
         return metrics
 

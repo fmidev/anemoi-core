@@ -67,12 +67,29 @@ training_loss:
 
 
 validation_metrics:
-  - _target_: anemoi.training.losses.MSELoss
-    scalers: []
-    ignore_nans: True
-  - _target_: anemoi.training.losses.MSELoss
-    scalers: []
-    ignore_nans: True
+  # dataset 0 (base model)
+  - mse:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['data_node_weights']
+      ignore_nans: True
+    mse_inside_lam_contribution:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['limited_area_mask', 'data_node_weights']
+      ignore_nans: True
+    mse_outside_lam_contribution:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['outside_lam_mask', 'data_node_weights']
+      ignore_nans: True
+    mse_inside_lam:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['lam_node_weights']
+      ignore_nans: True
+  # dataset 1 (extra decoder)
+  - mse:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['netatmo_node_weights']
+      ignore_nans: True
+
 
 rollout:
   start: 1
