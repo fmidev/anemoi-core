@@ -299,3 +299,25 @@ class LeakyFractionBounding(FractionBounding):
         # Calculate the fraction of the total variable
         x[..., self.data_index] *= x[..., self.total_variable]
         return x
+
+
+class ArgMaxBounding(BaseBounding):
+    """Initializes the ArgMaxBounding with specified parameters."""
+
+    def __init__(
+        self,
+        *,
+        variables: list[str],
+        name_to_index: dict,
+        statistics: Optional[dict] = None,
+        name_to_index_stats: Optional[dict] = None,
+    ) -> None:
+        super().__init__(variables=variables, name_to_index=name_to_index, statistics=statistics, name_to_index_stats=name_to_index_stats)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x[..., self.data_index] = torch.argmax(x[..., self.data_index], dim=-1)
+        return x
+
+class IdentityBounding(BaseBounding):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x

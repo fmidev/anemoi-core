@@ -130,6 +130,18 @@ class LeakyNormalizedReluBoundingSchema(NormalizedReluBoundingSchema):
     "Leaky normalized Relu bounding object defined in anemoi.models.layers.bounding."
 
 
+class ArgMaxBoundingSchema(BaseModel):
+    target_: Literal["anemoi.models.layers.bounding.ArgMaxBounding"] = Field(..., alias="_target_")
+    "ArgMax bounding object defined in anemoi.models.layers.bounding."
+    variables: list[str]
+    "List of variables to bound using the argmax method."
+
+class IdentityBoundingSchema(BaseModel):
+    target_: Literal["anemoi.models.layers.bounding.IdentityBounding"] = Field(..., alias="_target_")
+    "Identity bounding object defined in anemoi.models.layers.bounding."
+    variables: list[str]
+    "List of variables to bound using the identity method."
+
 Bounding = Annotated[
     Union[
         ReluBoundingSchema,
@@ -140,6 +152,8 @@ Bounding = Annotated[
         LeakyHardtanhBoundingSchema,
         NormalizedReluBoundingSchema,
         LeakyNormalizedReluBoundingSchema,
+        ArgMaxBoundingSchema,
+        IdentityBoundingSchema,
     ],
     Field(discriminator="target_"),
 ]
