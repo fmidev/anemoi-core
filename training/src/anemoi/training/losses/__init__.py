@@ -17,6 +17,7 @@ from .mae import MAELoss
 from .mse import MSELoss
 from .rmse import RMSELoss
 from .zip import ZipLoss
+from .cce import CategoricalCrossEntropyLoss
 
 __all__ = [
     "AlmostFairKernelCRPS",
@@ -28,5 +29,6 @@ __all__ = [
     "MSELoss",
     "RMSELoss",
     "ZipLoss",
+    "CategoricalCrossEntropyLoss",
     "get_loss_function",
 ]
