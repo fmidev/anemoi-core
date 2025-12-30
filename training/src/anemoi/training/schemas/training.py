@@ -210,6 +210,7 @@ class ImplementedLossesUsingBaseLossSchema(str, Enum):
     logcosh = "anemoi.training.losses.LogCoshLoss"
     huber = "anemoi.training.losses.HuberLoss"
     cce = "anemoi.training.losses.CategoricalCrossEntropyLoss"
+    bce = "anemoi.training.losses.BCELoss"
 
 
 class BaseLossSchema(BaseModel):

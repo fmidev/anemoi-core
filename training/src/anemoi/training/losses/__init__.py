@@ -18,9 +18,11 @@ from .mse import MSELoss
 from .rmse import RMSELoss
 from .zip import ZipLoss
 from .cce import CategoricalCrossEntropyLoss
+from .bce import BCELoss
 
 __all__ = [
     "AlmostFairKernelCRPS",
+    "BCELoss",
     "CombinedLoss",
     "HuberLoss",
     "KernelCRPS",
