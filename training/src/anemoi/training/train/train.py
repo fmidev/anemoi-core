@@ -243,6 +243,56 @@ class AnemoiTrainer:
 
         return model
 
+    def _initialize_decoders_extra(self, model: pl.LightningModule) -> None:
+        """Initialize extra decoders from the base decoder weights, excluding the head."""
+        LOGGER.info("Initializing extra decoders from base decoder weights (excluding head)...")
+
+        # Access the AnemoiObsFuser instance
+        try:
+            obsfuser = model.model.model
+        except AttributeError:
+             LOGGER.error("Could not access AnemoiObsFuser instance to initialize decoders.")
+             return
+
+        if not hasattr(obsfuser, "decoder") or not hasattr(obsfuser, "decoders_extra"):
+            LOGGER.warning("Model does not have 'decoder' or 'decoders_extra'. Skipping initialization.")
+            return
+
+        base_decoder = obsfuser.decoder
+        extra_decoders = obsfuser.decoders_extra
+
+        base_state_dict = base_decoder.state_dict()
+
+        # Filter out the head (node_data_extractor)
+        filtered_state_dict = {
+            k: v for k, v in base_state_dict.items() 
+            if "node_data_extractor" not in k
+        }
+
+        LOGGER.info(f"Found {len(filtered_state_dict)} shared parameters/buffers to copy from base decoder.")
+
+        for i, extra_decoder in enumerate(extra_decoders):
+            extra_state_dict = extra_decoder.state_dict()
+            keys_to_load = {}
+            for k, v in filtered_state_dict.items():
+                if k in extra_state_dict:
+                    if extra_state_dict[k].shape == v.shape:
+                        keys_to_load[k] = v
+                    else:
+                         LOGGER.debug(f"Skipping {k} due to shape mismatch: {extra_state_dict[k].shape} vs {v.shape}")
+                else:
+                    LOGGER.debug(f"Skipping {k} as it is not in extra decoder.")
+
+            if not keys_to_load:
+                 LOGGER.warning(f"No matching weights found to transfer to extra decoder {i}!")
+                 continue
+
+            missing, unexpected = extra_decoder.load_state_dict(keys_to_load, strict=False)
+            LOGGER.info(
+                f"Initialized extra decoder {i} with {len(keys_to_load)} tensors from base. "
+                f"Missing keys (head+mismatched): {len(missing)}"
+            )
+
     @rank_zero_only
     def _get_mlflow_run_id(self) -> str:
         run_id = self.mlflow_logger.run_id

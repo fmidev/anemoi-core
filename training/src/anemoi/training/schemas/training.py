@@ -361,6 +361,8 @@ class BaseTrainingSchema(BaseModel):
     "Enable transfer learning with layer dictionary mapping."
     layer_dict: Union[dict[str, str], None] = Field(default=None)
     "Layer dictionary for transfer learning mapping."
+    initialize_decoder_extra_from_base: bool = Field(default=False)
+    "Initialize extra decoders from the base decoder weights (excluding the head)."
 
 
 class ForecasterSchema(BaseTrainingSchema):
