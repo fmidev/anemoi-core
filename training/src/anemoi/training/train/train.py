@@ -238,8 +238,32 @@ class AnemoiTrainer:
             # Freeze the chosen model weights
             LOGGER.info("The following submodules will NOT be trained: %s", self.config.training.submodules_to_freeze)
             for submodule_name in self.config.training.submodules_to_freeze:
-                freeze_submodule_by_name(model, submodule_name)
-                LOGGER.info("%s frozen successfully.", submodule_name.upper())
+                if submodule_name.startswith("node_attributes"):
+                    # Special case: freeze by parameter name pattern
+                    # e.g., "node_attributes.trainable_tensors.data.trainable"
+                    # Find and freeze parameters matching this pattern
+                    freeze_count = 0
+                    # Check if it's in model.model (full path) or just model
+                    prefix_options = ["model.", ""]
+                    for prefix in prefix_options:
+                        search_path = f"{prefix}{submodule_name}"
+                        for param_name, param in model.named_parameters():
+                            if search_path in param_name:
+                                param.requires_grad = False
+                                LOGGER.info(f"freezing parameter {param_name}")
+                                freeze_count += 1
+                        if freeze_count > 0:
+                            break
+                    if freeze_count == 0:
+                        LOGGER.warning(f"No parameters found matching pattern '{submodule_name}'")
+                    else:
+                        LOGGER.info(f"{freeze_count} parameters frozen for '{submodule_name}'")
+                else:
+                    freeze_submodule_by_name(model, submodule_name)
+                LOGGER.info(f"{submodule_name} frozen successfully.")
+
+        if getattr(self.config.training, "initialize_decoder_extra_from_base", False):
+            self._initialize_decoders_extra(model)
 
         return model
 
