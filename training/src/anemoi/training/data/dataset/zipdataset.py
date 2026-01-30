@@ -110,55 +110,31 @@ class ZipDataset(IterableDataset):
 
     @property
     def supporting_arrays(self) -> dict:
-        """Return supporting arrays as a flat dictionary.
-        
-        For zip datasets, we flatten the structure and use the first dataset's
-        arrays as the primary ones.
-        """
-        raw_arrays = self.data.supporting_arrays()
+        """Return supporting arrays as a flat dictionary. Also adds decoder output coordinates."""
+        raw_arrays = dict(self.data.supporting_arrays())
         
         # If it's already a dict, clean up any tuple values
-        if isinstance(raw_arrays, dict):
-            result = {}
-            for key, value in raw_arrays.items():
-                # Remove numeric prefixes to match FROZEN structure
-                clean_key = key.split('/', 1)[1] if key.startswith(('0/', '1/', '2/', '3/', '4/', '5/', '6/', '7/', '8/', '9/')) else key
-                # Handle cases where value might be a tuple of arrays
-                if isinstance(value, tuple) and len(value) > 0:
-                    # If it's a tuple of arrays, take the first one
-                    if hasattr(value[0], 'shape'):
-                        result[clean_key] = value[0]
-                elif hasattr(value, 'shape'):
-                    # It's already a proper array
-                    result[clean_key] = value
-            return result
-            
-        # If it's a tuple/list of dicts, flatten them
-        if isinstance(raw_arrays, (tuple, list)) and len(raw_arrays) > 0:
-            # Start with the first dataset's arrays
-            result = {}
-            for i, dataset_arrays in enumerate(raw_arrays):
-                if isinstance(dataset_arrays, dict):
-                    # Add dataset index prefix to avoid key conflicts
-                    for key, value in dataset_arrays.items():
-                        if i == 0:
-                            # For first dataset, remove any existing numeric prefixes to match FROZEN structure
-                            prefixed_key = key.split('/', 1)[1] if key.startswith(('0/', '1/', '2/', '3/', '4/', '5/', '6/', '7/', '8/', '9/')) else key
-                        else:
-                            prefixed_key = f"source{i}/{key}"
-                        
-                        # Handle cases where value might be a tuple of arrays
-                        if isinstance(value, tuple) and len(value) > 0:
-                            # If it's a tuple of arrays, take the first one
-                            if hasattr(value[0], 'shape'):
-                                result[prefixed_key] = value[0]
-                        elif hasattr(value, 'shape'):
-                            # It's already a proper array
-                            result[prefixed_key] = value
-            return result
-            
-        # Fallback to empty dict
-        return {}
+        result = {}
+        for key, value in raw_arrays.items():
+            # Remove numeric prefixes to match FROZEN structure
+            clean_key = key.split('/', 1)[1] if key.startswith(('0/', '1/', '2/', '3/', '4/', '5/', '6/', '7/', '8/', '9/')) else key
+
+            # Handle cases where value might be a tuple of arrays
+            if isinstance(value, tuple) and len(value) > 0:
+                result[clean_key] = value[0]
+            elif hasattr(value, 'shape'):
+                # It's already a proper array
+                result[clean_key] = value
+
+        # Add decoder output coordinates (decoderN -> datasetN, starting from decoder1)
+        # Zip.latitudes and Zip.longitudes return tuples, so we index into them
+        for decoder_idx in range(1, len(self.data.datasets)):
+            result[f'output{decoder_idx}/latitudes'] = self.data.latitudes[decoder_idx]
+            result[f'output{decoder_idx}/longitudes'] = self.data.longitudes[decoder_idx]
+
+        for key, value in result.items():
+            assert not isinstance(value, tuple), f"Value for key {key} is a tuple"
+        return result
 
     @property
     def valid_date_indices(self) -> np.ndarray:

@@ -96,7 +96,10 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
         LOGGER.info(f"Unexpected layer when loading state dict: {layer}")
 
     # Needed for data indices check
-    model._ckpt_model_name_to_index = checkpoint["hyper_parameters"]["data_indices"].name_to_index
+    data_indices = checkpoint["hyper_parameters"]["data_indices"]
+    if isinstance(data_indices, (tuple, list)):
+        data_indices = data_indices[0]
+    model._ckpt_model_name_to_index = data_indices.name_to_index
     return model
 
 
