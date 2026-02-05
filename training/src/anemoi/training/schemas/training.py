@@ -209,6 +209,7 @@ class ImplementedLossesUsingBaseLossSchema(str, Enum):
     mae = "anemoi.training.losses.MAELoss"
     logcosh = "anemoi.training.losses.LogCoshLoss"
     huber = "anemoi.training.losses.HuberLoss"
+    mae_logit = "anemoi.training.losses.MAELogitLoss"
     cce = "anemoi.training.losses.CategoricalCrossEntropyLoss"
     bce = "anemoi.training.losses.BCELoss"
 
@@ -240,6 +241,11 @@ class HuberLossSchema(BaseLossSchema):
     "Threshold for Huber loss."
 
 
+class MAELogitLossSchema(BaseLossSchema):
+    eps: float = 1e-4
+    "Epsilon value for clamping logit input."
+
+
 class CombinedLossSchema(BaseLossSchema):
     target_: Literal["anemoi.training.losses.combined.CombinedLoss"] = Field(..., alias="_target_")
     losses: list[BaseLossSchema] = Field(min_length=1)
@@ -269,7 +275,7 @@ class CombinedLossSchema(BaseLossSchema):
         return self
 
 
-LossSchemas = Union[BaseLossSchema, HuberLossSchema, CombinedLossSchema, AlmostFairKernelCRPSSchema, KernelCRPSSchema]
+LossSchemas = Union[BaseLossSchema, HuberLossSchema, CombinedLossSchema, AlmostFairKernelCRPSSchema, KernelCRPSSchema, MAELogitLossSchema]
 
 
 class ImplementedStrategiesUsingBaseDDPStrategySchema(str, Enum):

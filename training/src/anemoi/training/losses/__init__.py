@@ -14,6 +14,7 @@ from .kcrps import KernelCRPS
 from .logcosh import LogCoshLoss
 from .loss import get_loss_function
 from .mae import MAELoss
+from .mae_logit import MAELogitLoss
 from .mse import MSELoss
 from .rmse import RMSELoss
 from .zip import ZipLoss
@@ -28,6 +29,7 @@ __all__ = [
     "KernelCRPS",
     "LogCoshLoss",
     "MAELoss",
+    "MAELogitLoss",
     "MSELoss",
     "RMSELoss",
     "ZipLoss",
