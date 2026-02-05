@@ -48,6 +48,7 @@ class AnemoiObsFuser(nn.Module):
         model_config = DotDict(model_config)
 
         self.use_obs_fuser = model_config.model.use_obs_fuser
+        self.use_skip_connection_for_decoder1 = getattr(model_config.model, "use_skip_connection_for_decoder1", False)
         self._truncation_data = truncation_data
 
         self._graph_data = graph_data
@@ -139,7 +140,7 @@ class AnemoiObsFuser(nn.Module):
                     model_config.model.decoder_extra,
                     _recursive_=False,  # Avoids instantiation of layer_kernels here
                     in_channels_src=self.num_channels,
-                    in_channels_dst=input_dim[dset_idx],
+                    in_channels_dst=input_dim[dset_idx] + (input_dim[0] if self.use_skip_connection_for_decoder1 else 0),
                     hidden_dim=self.num_channels,
                     out_channels_dst=self.num_output_channels[dset_idx],
                     sub_graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_names_data[dset_idx])],
@@ -395,9 +396,13 @@ class AnemoiObsFuser(nn.Module):
         )
 
         for dset, decoder_extra in enumerate(self.decoders_extra):
+            x_dst = x_obs_latent[dset]
+            if self.use_skip_connection_for_decoder1:
+                x_dst = torch.cat([x_dst, x_data_latent], dim=-1)
+
             x_out[dset + 1] = self._run_mapper(
                 decoder_extra,
-                (x_latent_proc, x_obs_latent[dset]),
+                (x_latent_proc, x_dst),
                 batch_size=batch_size,
                 shard_shapes=(shard_shapes_hidden, shard_shapes_obs[dset]),
                 model_comm_group=model_comm_group,
