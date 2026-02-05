@@ -408,41 +408,53 @@ class AnemoiMLflowLogger(MLFlowLogger):
             # This block is used when a run ID is specified with child runs option activated
             if config_run_id and on_resume_create_child and not fork_run_id:
                 parent_run_id = config_run_id  # parent_run_id
-                parent_run = mlflow_client.get_run(parent_run_id)
-                run_name = parent_run.info.run_name
-                self._check_server2server_lineage(parent_run)
-                self._check_dry_run(parent_run)
-                tags["mlflow.parentRunId"] = parent_run_id
-                tags["resumedRun"] = "True"  # tags can't take boolean values
+                try:
+                    parent_run = mlflow_client.get_run(parent_run_id)
+                    run_name = parent_run.info.run_name
+                    self._check_server2server_lineage(parent_run)
+                    self._check_dry_run(parent_run)
+                    tags["mlflow.parentRunId"] = parent_run_id
+                    tags["resumedRun"] = "True"  # tags can't take boolean values
+                except Exception as e:
+                    LOGGER.warning(f"Could not find parent run {parent_run_id} in MLflow: {e}")
             # This block is used when a run ID is specified without child runs option activated
             elif config_run_id and not on_resume_create_child and not fork_run_id:
                 run_id = config_run_id
-                run = mlflow_client.get_run(run_id)
-                run_name = run.info.run_name
-                self._check_server2server_lineage(run)
-                self._check_dry_run(parent_run)
-                mlflow_client.update_run(run_id=run_id, status="RUNNING")
-                tags["resumedRun"] = "True"
+                try:
+                    run = mlflow_client.get_run(run_id)
+                    run_name = run.info.run_name
+                    self._check_server2server_lineage(run)
+                    self._check_dry_run(run)
+                    mlflow_client.update_run(run_id=run_id, status="RUNNING")
+                    tags["resumedRun"] = "True"
+                except Exception as e:
+                    LOGGER.warning(f"Could not find run {run_id} in MLflow: {e}")
             # This block is used when a run is forked and an existing run ID is specified
             # Child run option is activated
             elif config_run_id and fork_run_id:
                 parent_run_id = config_run_id  # parent_run_id which is the main run ID
-                parent_run = mlflow_client.get_run(parent_run_id)
-                run_name = parent_run.info.run_name
-                self._check_server2server_lineage(parent_run)
-                self._check_dry_run(parent_run)
-                tags["mlflow.parentRunId"] = config_run_id  # We want to be linked to the main run ID
-                tags["resumedRun"] = "True"  # We want to be linked to the main run ID
-                tags["forkedRun"] = "True"  # This is a forked run
-                tags["forkedRunId"] = fork_run_id  # This is a forked run
+                try:
+                    parent_run = mlflow_client.get_run(parent_run_id)
+                    run_name = parent_run.info.run_name
+                    self._check_server2server_lineage(parent_run)
+                    self._check_dry_run(parent_run)
+                    tags["mlflow.parentRunId"] = config_run_id  # We want to be linked to the main run ID
+                    tags["resumedRun"] = "True"  # We want to be linked to the main run ID
+                    tags["forkedRun"] = "True"  # This is a forked run
+                    tags["forkedRunId"] = fork_run_id  # This is a forked run
+                except Exception as e:
+                    LOGGER.warning(f"Could not find parent run {parent_run_id} in MLflow: {e}")
             # This block is used when a run is forked without no child runs
             else:
                 parent_run_id = fork_run_id
                 tags["forkedRun"] = "True"
                 tags["forkedRunId"] = parent_run_id
-                run = mlflow_client.get_run(parent_run_id)
-                self._check_server2server_lineage(run)
-                self._check_dry_run(run)
+                try:
+                    run = mlflow_client.get_run(parent_run_id)
+                    self._check_server2server_lineage(run)
+                    self._check_dry_run(run)
+                except Exception as e:
+                    LOGGER.warning(f"Could not find fork run {parent_run_id} in MLflow: {e}")
 
         if not run_name:
             import uuid
