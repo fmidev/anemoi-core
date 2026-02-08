@@ -321,3 +321,11 @@ class ArgMaxBounding(BaseBounding):
 class IdentityBounding(BaseBounding):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x
+
+
+class SigmoidBounding(BaseBounding):
+    """Initializes the bounding with a Sigmoid activation."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x[..., self.data_index] = torch.sigmoid(x[..., self.data_index])
+        return x

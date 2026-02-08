@@ -142,6 +142,13 @@ class IdentityBoundingSchema(BaseModel):
     variables: list[str]
     "List of variables to bound using the identity method."
 
+
+class SigmoidBoundingSchema(BaseModel):
+    target_: Literal["anemoi.models.layers.bounding.SigmoidBounding"] = Field(..., alias="_target_")
+    "Sigmoid bounding object defined in anemoi.models.layers.bounding."
+    variables: list[str]
+    "List of variables to bound using the sigmoid method."
+
 Bounding = Annotated[
     Union[
         ReluBoundingSchema,
@@ -154,6 +161,7 @@ Bounding = Annotated[
         LeakyNormalizedReluBoundingSchema,
         ArgMaxBoundingSchema,
         IdentityBoundingSchema,
+        SigmoidBoundingSchema,
     ],
     Field(discriminator="target_"),
 ]
