@@ -152,6 +152,24 @@ class AnemoiObsFuser(nn.Module):
             ]
         )
 
+        self.processors_extra = None
+        if hasattr(model_config.model, "processor_extra") and model_config.model.processor_extra is not None:
+            LOGGER.info("Initializing implementations of processor_extra")
+            self.processors_extra = nn.ModuleList(
+                [
+                    instantiate(
+                        model_config.model.processor_extra,
+                        _recursive_=False,  # Avoids instantiation of layer_kernels here
+                        num_channels=self.num_channels,
+                        sub_graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)],
+                        src_grid_size=self.node_attributes.num_nodes[self._graph_name_hidden],
+                        dst_grid_size=self.node_attributes.num_nodes[self._graph_name_hidden],
+                    )
+                    for dset_idx, dset in enumerate(self._graph_names_data)
+                    if dset != self._graph_names_data[0]
+                ]
+            )
+
         self.boundings = nn.ModuleList(
             [
                 nn.ModuleList(
@@ -400,9 +418,19 @@ class AnemoiObsFuser(nn.Module):
             if self.use_skip_connection_for_decoder1:
                 x_dst = torch.cat([x_dst, x_data_latent], dim=-1)
 
+            x_latent_dset = x_latent_proc
+            if self.processors_extra is not None:
+                x_latent_dset = self.processors_extra[dset](
+                    x_latent_dset,
+                    batch_size=batch_size,
+                    shard_shapes=shard_shapes_hidden,
+                    model_comm_group=model_comm_group,
+                )
+                x_latent_dset = x_latent_dset + x_latent_proc
+
             x_out[dset + 1] = self._run_mapper(
                 decoder_extra,
-                (x_latent_proc, x_dst),
+                (x_latent_dset, x_dst),
                 batch_size=batch_size,
                 shard_shapes=(shard_shapes_hidden, shard_shapes_obs[dset]),
                 model_comm_group=model_comm_group,

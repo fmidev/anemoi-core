@@ -238,6 +238,8 @@ class ObsFuserModelSchema(BaseModelSchema):
     use_obs_fuser: bool = Field(default=False)
     decoder_extra: GraphTransformerDecoderSchema
     "Observation decoder schema."
+    processor_extra: GraphTransformerProcessorSchema | None = None
+    "Observation processor schema."
 
 
 ModelSchema = Union[BaseModelSchema, EnsModelSchema, ObsFuserModelSchema]
