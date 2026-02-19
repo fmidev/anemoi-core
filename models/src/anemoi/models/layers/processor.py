@@ -308,6 +308,7 @@ class GraphTransformerProcessor(GraphEdgeMixin, BaseProcessor):
         sub_graph: HeteroData,
         sub_graph_edge_attributes: list[str],
         qk_norm: bool = False,
+        dropout_p: float = 0.0,
         cpu_offload: bool = False,
         layer_kernels: DotDict,
         **kwargs,
@@ -338,6 +339,8 @@ class GraphTransformerProcessor(GraphEdgeMixin, BaseProcessor):
             Sub graph edge attributes
         qk_norm: bool, optional
             Normalize query and key, by default False
+        dropout_p: float, optional
+            Dropout probability used for multi-head self attention, default 0.0
         cpu_offload : bool, optional
             Whether to offload processing to CPU, by default False
         layer_kernels : DotDict
@@ -366,6 +369,7 @@ class GraphTransformerProcessor(GraphEdgeMixin, BaseProcessor):
             num_heads=num_heads,
             mlp_hidden_ratio=mlp_hidden_ratio,
             qk_norm=qk_norm,
+            dropout_p=dropout_p,
             edge_dim=self.edge_dim,
         )
 

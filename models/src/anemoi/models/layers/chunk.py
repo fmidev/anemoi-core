@@ -227,6 +227,7 @@ class GraphTransformerProcessorChunk(BaseProcessorChunk):
         num_heads: int = 16,
         mlp_hidden_ratio: int = 4,
         qk_norm: bool = False,
+        dropout_p: float = 0.0,
         edge_dim: Optional[int] = None,
     ) -> None:
         """Initialize GraphTransformerProcessorChunk.
@@ -246,6 +247,8 @@ class GraphTransformerProcessorChunk(BaseProcessorChunk):
             ratio of mlp hidden dimension to embedding dimension, default 4
         qk_norm: bool, optional
             Normalize query and key, by default False
+        dropout_p: float, optional
+            Dropout probability, by default 0.0
         edge_dim: int, by default None
             Embed edges with input dimension edge_dim
         """
@@ -261,6 +264,7 @@ class GraphTransformerProcessorChunk(BaseProcessorChunk):
             edge_dim=edge_dim,
             layer_kernels=layer_kernels,
             qk_norm=qk_norm,
+            dropout_p=dropout_p,
         )
 
     def forward(

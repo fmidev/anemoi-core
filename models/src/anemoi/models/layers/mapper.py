@@ -204,6 +204,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         src_grid_size: int,
         dst_grid_size: int,
         qk_norm: bool = False,
+        dropout_p: float = 0.0,
         cpu_offload: bool = False,
         layer_kernels: DotDict = None,
     ) -> None:
@@ -237,6 +238,8 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
             Destination grid size
         qk_norm : bool, optional
             Whether to use query and key normalization, default False
+        dropout_p: float, optional
+            Dropout probability, by default 0.0
         cpu_offload : bool, optional
             Whether to offload processing to CPU, by default False
         layer_kernels : DotDict, optional
@@ -267,6 +270,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
             edge_dim=self.edge_dim,
             num_chunks=num_chunks,
             qk_norm=qk_norm,
+            dropout_p=dropout_p,
             layer_kernels=self.layer_factory,
         )
 
@@ -328,6 +332,7 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
         src_grid_size: int,
         dst_grid_size: int,
         qk_norm: bool = False,
+        dropout_p: float = 0.0,
         cpu_offload: bool = False,
         layer_kernels: DotDict = None,
     ) -> None:
@@ -361,6 +366,8 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
             Destination grid size
         qk_norm : bool, optional
             Whether to use query and key normalization, default False
+        dropout_p: float, optional
+             Dropout probability, by default 0.0
         cpu_offload : bool
             Whether to offload processing to CPU, by default False
         layer_kernels : DotDict
@@ -375,6 +382,7 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
             num_chunks=num_chunks,
             cpu_offload=cpu_offload,
             qk_norm=qk_norm,
+            dropout_p=dropout_p,
             num_heads=num_heads,
             mlp_hidden_ratio=mlp_hidden_ratio,
             sub_graph=sub_graph,
@@ -421,6 +429,7 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
         src_grid_size: int,
         dst_grid_size: int,
         qk_norm: bool = False,
+        dropout_p: float = 0.0,
         initialise_data_extractor_zero: bool = False,
         cpu_offload: bool = False,
         layer_kernels: DotDict = None,
@@ -457,6 +466,8 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
             Whether to initialise the data extractor to zero
         qk_norm : bool, optional
             Whether to use query and key normalization, default False
+        dropout_p: float, optional
+            Dropout probability, by default 0.0
         cpu_offload : bool, optional
             Whether to offload processing to CPU, by default False
         layer_kernels : DotDict, optional
@@ -472,6 +483,7 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
             num_chunks=num_chunks,
             cpu_offload=cpu_offload,
             qk_norm=qk_norm,
+            dropout_p=dropout_p,
             num_heads=num_heads,
             mlp_hidden_ratio=mlp_hidden_ratio,
             sub_graph=sub_graph,

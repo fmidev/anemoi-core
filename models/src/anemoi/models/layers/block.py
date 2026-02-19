@@ -435,6 +435,7 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
         bias: bool = True,
         qk_norm: bool = False,
         update_src_nodes: bool = False,
+        dropout_p: float = 0.0,
         layer_kernels: DotDict,
         **kwargs,
     ) -> None:
@@ -458,6 +459,8 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
             Normalize query and key
         update_src_nodes: bool, by default False
             Update src if src and dst nodes are given
+        dropout_p: float, optional
+            Dropout probability, by default 0.0
         layer_kernels : DotDict
             A dict of layer implementations e.g. layer_kernels.Linear = "torch.nn.Linear"
             Defined in config/models/<model>.yaml
@@ -479,7 +482,7 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
         self.lin_self = Linear(in_channels, num_heads * self.out_channels_conv, bias=bias)
         self.lin_edge = Linear(edge_dim, num_heads * self.out_channels_conv)  # , bias=False)
 
-        self.conv = GraphTransformerConv(out_channels=self.out_channels_conv)
+        self.conv = GraphTransformerConv(out_channels=self.out_channels_conv, dropout=dropout_p)
 
         self.projection = Linear(out_channels, out_channels)
 
@@ -770,6 +773,7 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         bias: bool = True,
         qk_norm: bool = False,
         update_src_nodes: bool = False,
+        dropout_p: float = 0.0,
         layer_kernels: DotDict,
         **kwargs,
     ) -> None:
@@ -793,6 +797,8 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
             Normalize query and key, by default False
         update_src_nodes: bool
             Update src if src and dst nodes are given, by default False
+        dropout_p: float, optional
+            Dropout probability, by default 0.0
         layer_kernels : DotDict
             A dict of layer implementations e.g. layer_kernels.Linear = "torch.nn.Linear"
             Defined in config/models/<model>.yaml
@@ -809,6 +815,7 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
             qk_norm=qk_norm,
             num_chunks=num_chunks,
             update_src_nodes=update_src_nodes,
+            dropout_p=dropout_p,
             **kwargs,
         )
 
