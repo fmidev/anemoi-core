@@ -242,6 +242,19 @@ class LeakyHardtanhBounding(HardtanhBounding):
         return x
 
 
+class SoftmaxBounding(BaseBounding):
+    """Applies softmax over a group of variables in the last dimension.
+
+    Converts raw logits for a set of mutually exclusive classes into
+    probabilities that sum to 1 across the group. Suitable for categorical
+    variables such as precipitation form.
+    """
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x[..., self.data_index] = torch.nn.functional.softmax(x[..., self.data_index], dim=-1)
+        return x
+
+
 class FractionBounding(BaseBounding):
     """Initializes the FractionBounding with specified parameters.
 

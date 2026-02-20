@@ -150,6 +150,13 @@ class SigmoidBoundingSchema(BaseModel):
     variables: list[str]
     "List of variables to bound using the sigmoid method."
 
+
+class SoftmaxBoundingSchema(BaseModel):
+    target_: Literal["anemoi.models.layers.bounding.SoftmaxBounding"] = Field(..., alias="_target_")
+    "Softmax bounding object defined in anemoi.models.layers.bounding."
+    variables: list[str]
+    "List of mutually exclusive categorical variables to apply softmax over."
+
 Bounding = Annotated[
     Union[
         ReluBoundingSchema,
@@ -163,6 +170,7 @@ Bounding = Annotated[
         ArgMaxBoundingSchema,
         IdentityBoundingSchema,
         SigmoidBoundingSchema,
+        SoftmaxBoundingSchema,
     ],
     Field(discriminator="target_"),
 ]
