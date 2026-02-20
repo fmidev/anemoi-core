@@ -26,16 +26,23 @@ LOGGER = logging.getLogger(__name__)
 class CategoricalCrossEntropyLoss(BaseLoss):
     """Categorical Cross Entropy loss for multi-class classification.
 
-    Expects predictions as raw logits and targets as one-hot encoded vectors.
-    Targets are converted to class indices via argmax internally.
+    Expects one-hot encoded targets and either raw logits or probabilities.
 
     Works with both deterministic and ensemble models:
     - Deterministic: pred (bs, 1, grid, n_classes), target (bs, 1, grid, n_classes)
     - Ensemble: pred (bs, ens, grid, n_classes), target (bs, grid, n_classes)
+
+    Parameters
+    ----------
+    from_logits : bool
+        If True (default), pred contains raw logits and log_softmax is applied
+        internally. Set to False when SoftmaxBounding has already been applied
+        (pred contains probabilities); log is applied directly in that case.
     """
 
-    def __init__(self, ignore_nans: bool = False, **kwargs) -> None:
+    def __init__(self, ignore_nans: bool = False, from_logits: bool = True, **kwargs) -> None:
         super().__init__(ignore_nans=ignore_nans, **kwargs)
+        self.from_logits = from_logits
 
     def forward(
         self,
@@ -53,7 +60,7 @@ class CategoricalCrossEntropyLoss(BaseLoss):
         Parameters
         ----------
         pred : torch.Tensor
-            Prediction logits.
+            Prediction logits or probabilities.
             Shape (bs, ensemble, grid, n_classes) for both det and ensemble.
         target : torch.Tensor
             One-hot encoded targets.
@@ -88,8 +95,13 @@ class CategoricalCrossEntropyLoss(BaseLoss):
             assert target.ndim == 4, f"CCE: target must be 3D or 4D, got shape {target.shape}"
             target_4d = target.float()
 
-        # Cross-entropy via log-softmax + one-hot dot product.
-        log_probs = torch.nn.functional.log_softmax(pred, dim=-1)  # (bs, ens, grid, n_classes)
+        if self.from_logits:
+            # Numerically stable: log_softmax applied to raw logits
+            log_probs = torch.nn.functional.log_softmax(pred, dim=-1)
+        else:
+            # SoftmaxBounding already applied — pred is probabilities
+            log_probs = torch.log(pred.clamp(min=1e-7))
+
         ce = -(log_probs * target_4d).sum(dim=-1, keepdim=True)    # (bs, ens, grid, 1)
 
         # Expand to (bs, ens, grid, n_classes) so the training framework can index
