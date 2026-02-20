@@ -1,0 +1,117 @@
+---
+defaults:
+- scalers: zip
+
+# resume or fork a training from a checkpoint last.ckpt or specified in hardware.files.warm_start
+run_id: null
+fork_run_id: null
+load_weights_only: False
+transfer_learning: False
+
+# run in deterministic mode ; slows down
+deterministic: False
+
+# miscellaneous
+precision: bf16-mixed
+
+# multistep input
+# 1 = single step scheme, X(t-1) used to predict X(t)
+# k > 1: multistep scheme, uses [X(t-k), X(t-k+1), ... X(t-1)] to predict X(t)
+# Deepmind use k = 2 in their model
+multistep_input: 2
+
+# gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
+# the effective batch size becomes num-devices * batch_size * k
+accum_grad_batches: 1
+
+num_sanity_val_steps: 1
+
+# clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
+gradient_clip:
+  val: 32.
+  algorithm: value
+
+# stochastic weight averaging
+# https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
+swa:
+  enabled: False
+  lr: 1.e-4
+
+optimizer:
+  zero: False # use ZeroRedundancyOptimizer ; saves memory for larger models
+  kwargs:
+    betas: [0.9, 0.95]
+
+model_task: anemoi.training.train.forecaster.NetatmoGraphForecaster
+
+strategy:
+  _target_: anemoi.training.distributed.strategy.DDPEnsGroupStrategy
+  num_gpus_per_ensemble: ${hardware.num_gpus_per_ensemble}
+  num_gpus_per_model: ${hardware.num_gpus_per_model}
+  read_group_size: ${dataloader.read_group_size}
+
+# loss functions
+
+# dynamic rescaling of the loss gradient
+# see https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2
+# don't enable this by default until it's been tested and proven beneficial
+loss_gradient_scaling: False
+
+training_loss:
+  - _target_: anemoi.training.losses.AlmostFairKernelCRPS
+    scalers: ['pressure_level', 'general_variable', 'nan_mask_weights', 'data_node_weights']
+    ignore_nans: False
+  - _target_: anemoi.training.losses.AlmostFairKernelCRPS
+    scalers: ['general_variable', 'netatmo_node_weights']
+    ignore_nans: False
+
+
+validation_metrics:
+  # dataset 0 (base model)
+  - mse:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['data_node_weights']
+      ignore_nans: True
+    mse_inside_lam_contribution:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['limited_area_mask', 'data_node_weights']
+      ignore_nans: True
+    mse_outside_lam_contribution:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['outside_lam_mask', 'data_node_weights']
+      ignore_nans: True
+    mse_inside_lam:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['lam_node_weights']
+      ignore_nans: True
+  # dataset 1 (extra decoder)
+  - mse:
+      _target_: anemoi.training.losses.MSELoss
+      scalers: ['netatmo_node_weights']
+      ignore_nans: True
+
+
+rollout:
+  start: 1
+  max: 1
+  epoch_increment: 0
+
+lr:
+  warmup: 1000 # number of warmup iterations
+  rate: 2.0e-05
+  iterations: ${training.max_steps}
+  min: 1.0e-06
+
+train_module: anemoi.training.train.forecaster.netatmo_forecaster
+train_function: NetatmoGraphForecaster
+
+dataset_loss_scaling: [1.0, 0.05]
+
+metrics: []
+
+variable_groups:
+  default: sfc
+  pl: [q, t, u, v, w, z]
+  
+
+submodules_to_freeze: []

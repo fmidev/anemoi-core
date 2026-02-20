@@ -165,15 +165,34 @@ class ZipDataset(IterableDataset):
         model_comm_group_id: int,
         model_comm_group_rank: int,
         model_comm_num_groups: int,
-        reader_group_rank: int,
-        reader_group_size: int,
+        *args: int,
     ) -> None:
         self.global_rank = global_rank
         self.model_comm_group_id = model_comm_group_id
         self.model_comm_group_rank = model_comm_group_rank
         self.model_comm_num_groups = model_comm_num_groups
-        self.reader_group_rank = reader_group_rank
-        self.reader_group_size = reader_group_size
+
+        if len(args) == 5:
+            # DDPEnsGroupStrategy passes 5 extra args:
+            # ens_comm_group_id, ens_comm_group_rank, ens_comm_num_groups, reader_group_rank, reader_group_size
+            self.ens_comm_group_id = args[0]
+            self.ens_comm_group_rank = args[1]
+            self.ens_comm_num_groups = args[2]
+            self.reader_group_rank = args[3]
+            self.reader_group_size = args[4]
+        elif len(args) == 2:
+            # DDPGroupStrategy passes 2 extra args:
+            # reader_group_rank, reader_group_size
+            self.ens_comm_group_id = 0
+            self.ens_comm_group_rank = 0
+            self.ens_comm_num_groups = 1
+            self.reader_group_rank = args[0]
+            self.reader_group_size = args[1]
+        else:
+            raise TypeError(
+                f"ZipDataset.set_comm_group_info() expected 2 or 5 additional positional arguments, "
+                f"but got {len(args)}. Args: {args}"
+            )
 
         assert self.reader_group_size >= 1, "reader_group_size must be positive"
 
@@ -183,7 +202,7 @@ class ZipDataset(IterableDataset):
             model_comm_group_id,
             model_comm_group_rank,
             model_comm_num_groups,
-            reader_group_rank,
+            self.reader_group_rank,
         )
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:

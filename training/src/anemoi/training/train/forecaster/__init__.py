@@ -11,5 +11,6 @@ from .ensforecaster import GraphEnsForecaster
 from .forecaster import GraphForecaster
 from .interpolator import GraphInterpolator
 from .netatmo_forecaster import NetatmoGraphForecaster
+from .netatmo_ensforecaster import NetatmoGraphEnsForecaster
 
-__all__ = ["GraphEnsForecaster", "GraphForecaster", "GraphInterpolator", "NetatmoGraphForecaster"]
+__all__ = ["GraphEnsForecaster", "GraphForecaster", "GraphInterpolator", "NetatmoGraphForecaster", "NetatmoGraphEnsForecaster"]

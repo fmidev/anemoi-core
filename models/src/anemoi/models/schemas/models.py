@@ -45,6 +45,7 @@ class DefinedModels(str, Enum):
     ANEMOI_MODEL_INTERPENC_PROC_DEC = "anemoi.models.models.interpolator.AnemoiModelEncProcDecInterpolator"
     ANEMOI_MODEL_INTERPENC_PROC_DEC_SHORT = "anemoi.models.models.AnemoiModelEncProcDecInterpolator"
     ANEMOI_OBS_FUSER = "anemoi.models.models.obsfuser.AnemoiObsFuser"
+    ANEMOI_ENS_OBS_FUSER = "anemoi.models.models.ens_obsfuser.AnemoiEnsObsFuser"
 
 
 class Model(BaseModel):
@@ -242,4 +243,11 @@ class ObsFuserModelSchema(BaseModelSchema):
     "Observation processor schema."
 
 
-ModelSchema = Union[BaseModelSchema, EnsModelSchema, ObsFuserModelSchema]
+class EnsObsFuserModelSchema(EnsModelSchema):
+    decoder_extra: GraphTransformerDecoderSchema
+    "Additional decoder schema."
+    processor_extra: GraphTransformerProcessorSchema | None = None
+    "Additional processor schema."
+
+
+ModelSchema = Union[BaseModelSchema, EnsModelSchema, ObsFuserModelSchema, EnsObsFuserModelSchema]

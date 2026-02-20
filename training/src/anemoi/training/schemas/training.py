@@ -381,7 +381,10 @@ class ForecasterSchema(BaseTrainingSchema):
 
 
 class ForecasterEnsSchema(BaseTrainingSchema):
-    model_task: Literal["anemoi.training.train.forecaster.GraphEnsForecaster",] = Field(..., alias="model_task")
+    model_task: Literal[
+        "anemoi.training.train.forecaster.GraphEnsForecaster",
+        "anemoi.training.train.forecaster.NetatmoGraphEnsForecaster",
+    ] = Field(..., alias="model_task")
     "Training objective."
     ensemble_size_per_device: PositiveInt = Field(example=1)
     "Number of ensemble member per device"
