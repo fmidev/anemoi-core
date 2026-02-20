@@ -38,11 +38,29 @@ class CategoricalCrossEntropyLoss(BaseLoss):
         If True (default), pred contains raw logits and log_softmax is applied
         internally. Set to False when SoftmaxBounding has already been applied
         (pred contains probabilities); log is applied directly in that case.
+    class_weights : list[float] | None
+        Per-class multipliers applied to the cross-entropy before spatial
+        aggregation. Length must equal n_classes. Use values > 1 for rare
+        classes to counteract class imbalance — the loss for a grid point
+        belonging to class k is multiplied by class_weights[k], so the
+        gradient signal for underrepresented classes is amplified relative
+        to dominant ones. None (default) means uniform weighting.
     """
 
-    def __init__(self, ignore_nans: bool = False, from_logits: bool = True, **kwargs) -> None:
+    def __init__(
+        self,
+        ignore_nans: bool = False,
+        from_logits: bool = True,
+        class_weights: list[float] | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(ignore_nans=ignore_nans, **kwargs)
         self.from_logits = from_logits
+        # Register as buffer so it moves to the right device automatically
+        if class_weights is not None:
+            self.register_buffer("class_weights", torch.tensor(class_weights, dtype=torch.float32), persistent=False)
+        else:
+            self.class_weights = None
 
     def forward(
         self,
@@ -102,7 +120,14 @@ class CategoricalCrossEntropyLoss(BaseLoss):
             # SoftmaxBounding already applied — pred is probabilities
             log_probs = torch.log(pred.clamp(min=1e-7))
 
-        ce = -(log_probs * target_4d).sum(dim=-1, keepdim=True)    # (bs, ens, grid, 1)
+        if self.class_weights is not None:
+            # Weight each grid point's loss by the class it belongs to.
+            # target_4d is one-hot so (target_4d * class_weights).sum(-1) selects
+            # the weight of the true class at each grid point: shape (bs, ens, grid).
+            per_point_weight = (target_4d * self.class_weights).sum(dim=-1, keepdim=True)
+            ce = -(log_probs * target_4d).sum(dim=-1, keepdim=True) * per_point_weight
+        else:
+            ce = -(log_probs * target_4d).sum(dim=-1, keepdim=True)    # (bs, ens, grid, 1)
 
         # Expand to (bs, ens, grid, n_classes) so the training framework can index
         # per-variable with scaler_indices. All class slots hold the same CE value;

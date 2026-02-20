@@ -246,6 +246,13 @@ class MAELogitLossSchema(BaseLossSchema):
     "Epsilon value for clamping logit input."
 
 
+class CategoricalCrossEntropyLossSchema(BaseLossSchema):
+    from_logits: bool = True
+    "If True, applies log_softmax internally. Set False when SoftmaxBounding is already applied."
+    class_weights: Union[list[float], None] = None
+    "Per-class loss multipliers to counteract class imbalance. Length must equal n_classes."
+
+
 class CombinedLossSchema(BaseLossSchema):
     target_: Literal["anemoi.training.losses.combined.CombinedLoss"] = Field(..., alias="_target_")
     losses: list[BaseLossSchema] = Field(min_length=1)
@@ -275,7 +282,7 @@ class CombinedLossSchema(BaseLossSchema):
         return self
 
 
-LossSchemas = Union[BaseLossSchema, HuberLossSchema, CombinedLossSchema, AlmostFairKernelCRPSSchema, KernelCRPSSchema, MAELogitLossSchema]
+LossSchemas = Union[BaseLossSchema, HuberLossSchema, CombinedLossSchema, AlmostFairKernelCRPSSchema, KernelCRPSSchema, MAELogitLossSchema, CategoricalCrossEntropyLossSchema]
 
 
 class ImplementedStrategiesUsingBaseDDPStrategySchema(str, Enum):
