@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -603,8 +604,17 @@ class AnemoiTrainer:
         LOGGER.debug("---- DONE. ----")
 
 
+class _RankFilter(logging.Filter):
+    """Only allow log records on global rank 0."""
+
+    def filter(self, record):
+        rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0")))
+        return rank == 0
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig) -> None:
+    logging.getLogger().addFilter(_RankFilter())
     AnemoiTrainer(config).train()
 
 
