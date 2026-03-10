@@ -52,10 +52,12 @@ class CategoricalCrossEntropyLoss(BaseLoss):
         ignore_nans: bool = False,
         from_logits: bool = True,
         class_weights: list[float] | None = None,
+        label_smoothing: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__(ignore_nans=ignore_nans, **kwargs)
         self.from_logits = from_logits
+        self.label_smoothing = label_smoothing
         # Register as buffer so it moves to the right device automatically
         if class_weights is not None:
             self.register_buffer("class_weights", torch.tensor(class_weights, dtype=torch.float32), persistent=False)
@@ -112,6 +114,10 @@ class CategoricalCrossEntropyLoss(BaseLoss):
         else:
             assert target.ndim == 4, f"CCE: target must be 3D or 4D, got shape {target.shape}"
             target_4d = target.float()
+
+        if self.label_smoothing > 0.0:
+            n_classes = target_4d.shape[-1]
+            target_4d = (1.0 - self.label_smoothing) * target_4d + self.label_smoothing / n_classes
 
         if self.from_logits:
             # Numerically stable: log_softmax applied to raw logits

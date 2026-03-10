@@ -251,6 +251,8 @@ class CategoricalCrossEntropyLossSchema(BaseLossSchema):
     "If True, applies log_softmax internally. Set False when SoftmaxBounding is already applied."
     class_weights: Union[list[float], None] = None
     "Per-class loss multipliers to counteract class imbalance. Length must equal n_classes."
+    label_smoothing: float = 0.0
+    "Mix one-hot targets with uniform distribution: target = (1-ε)*one_hot + ε/n_classes. Prevents gradient explosion from rare classes."
 
 
 class CombinedLossSchema(BaseLossSchema):
