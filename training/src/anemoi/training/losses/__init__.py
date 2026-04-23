@@ -8,6 +8,7 @@
 # nor does it submit to any jurisdiction.
 
 from .combined import CombinedLoss
+from .mixture_ce import MixtureCrossEntropyLoss
 from .huber import HuberLoss
 from .kcrps import AlmostFairKernelCRPS
 from .kcrps import KernelCRPS
@@ -38,5 +39,6 @@ __all__ = [
     "SpectralL2Loss",
     "WeightedMSELoss",
     "AFCRPSFFTLoss",
+    "MixtureCrossEntropyLoss",
     "get_loss_function",
 ]
