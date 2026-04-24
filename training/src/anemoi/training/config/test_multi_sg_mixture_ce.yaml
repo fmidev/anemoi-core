@@ -18,6 +18,7 @@ system:
     dataset_global_sfc_1: aifs-od-an-oper-0001-mars-n320-2016-2023-6h-v1-land.zarr
     dataset_global_sfc_2: aifs-od-an-oper-0001-mars-n320-2024-2025-6h-v1-land.zarr
     dataset_preform: meps-preform-onehot-2.5km-6h.zarr
+    dataset: jajadingdong.zarr
     graph: /scratch/project_462000975/anemoi/output/aila-v2-multi-decoder/output/graphs/confused-orphan-md-v2.pt
     warm_start: /scratch/project_462000975/anemoi/output/aila-v2-multi-decoder/output/checkpoints/confused-orphan/confused_orphan_r6.ckpt
   output:
@@ -104,8 +105,8 @@ datasets:
             - tcc
             - strd
             - ssrd
-          adjust: ["start", "end"]
-          reorder: sort
+        adjust: ["start", "end"]
+        reorder: sort
       min_distance_km: 0
       adjust: all
     select: ${selected_vars}
@@ -332,4 +333,6 @@ per_dataset_overrides:
           class_weights: null
       variable_groups:
         default: preform
+        pl:
+          param: []
       metrics: []

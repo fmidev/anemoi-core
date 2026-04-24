@@ -56,6 +56,9 @@ def print_variable_scaling(loss: BaseLoss, data_indices: IndexCollection) -> dic
         return variable_scaling
 
     variable_scaling = loss.scaler.subset_by_dim(TensorDim.VARIABLE.value).get_scaler(len(TensorDim)).reshape(-1)
+    n_vars = len(data_indices.model.output.name_to_index)
+    if variable_scaling.numel() == 1:
+        variable_scaling = variable_scaling.expand(n_vars)
     log_text = f"Final Variable Scaling in {loss.__class__.__name__}: "
     scaling_values, scaling_sum = {}, 0.0
 
