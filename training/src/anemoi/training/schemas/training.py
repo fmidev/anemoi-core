@@ -262,6 +262,7 @@ class ImplementedLossesUsingBaseLossSchema(StrEnum):
     spectral_crps = "anemoi.training.losses.SpectralCRPSLoss"
     spectral_l2 = "anemoi.training.losses.SpectralL2Loss"
     spectral_amse = "anemoi.training.losses.SpectralAMSELoss"
+    mixture_cross_entropy = "anemoi.training.losses.MixtureCrossEntropyLoss"
 
 
 class CheckVariablesCompatibilitySchema(BaseModel):
@@ -388,6 +389,26 @@ class TimeAggregateLossWrapperSchema(BaseModel):
                 with open_dict(v):
                     v["scalers"] = []
         return v
+
+
+class MixtureCrossEntropyLossSchema(BaseLossSchema):
+    """Mixture cross entropy loss class."""
+
+    num_classes: int
+    """Number of predicted classes."""
+    label_smoothing: float = 0.0
+    """Smooth lavels."""
+    class_weights: list[float] | None = None
+    """Optional class weights."""
+    no_autocast: bool = True
+    "Deactivate autocast for the mixture cross entropy loss calculation"
+
+    @model_validator(mode="after")
+    def check_subgrid_transform(self) -> Self:
+        if self.class_weights is not None and len(self.class_weights) != self.num_classes:
+            msg = f"Length of weights {len(self.class_weights)} must num_classes {self.num_classes}"
+            raise ValueError(msg)
+        return self
 
 
 class MultiScaleLossSchema(BaseModel):
@@ -540,6 +561,8 @@ def _loss_discriminator(v: Any) -> str:
         return "spectral"
     if target == "anemoi.training.losses.HuberLoss":
         return "huber"
+    if target == "anemoi.training.losses.MixtureCrossEntropyLoss":
+        return "mixture_cross_entropy"
     if target == "anemoi.training.losses.aggregate.TimeAggregateLossWrapper":
         return "time_aggregate"
     return "base"
@@ -565,7 +588,8 @@ class CombinedLossSchema(BaseLossSchema):
             | Annotated[CRPSSchema, Tag("crps")]
             | Annotated[SpectralLossSchema, Tag("spectral")]
             | Annotated[MultiScaleLossSchema, Tag("multiscale")]
-            | Annotated[TimeAggregateLossWrapperSchema, Tag("time_aggregate")],
+            | Annotated[TimeAggregateLossWrapperSchema, Tag("time_aggregate")]
+            | Annotated[MixtureCrossEntropyLossSchema, Tag("mixture_cross_entropy")],
             Discriminator(_loss_discriminator),
         ]
     ] = Field(min_length=1)
@@ -620,7 +644,8 @@ LossSchemas = Annotated[
     | Annotated[CRPSSchema, Tag("crps")]
     | Annotated[SpectralLossSchema, Tag("spectral")]
     | Annotated[TimeAggregateLossWrapperSchema, Tag("time_aggregate")]
-    | Annotated[MultiScaleLossSchema, Tag("multiscale")],
+    | Annotated[MultiScaleLossSchema, Tag("multiscale")]
+    | Annotated[MixtureCrossEntropyLossSchema, Tag("mixture_cross_entropy")],
     Discriminator(_loss_discriminator),
 ]
 

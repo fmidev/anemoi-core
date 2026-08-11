@@ -15,6 +15,7 @@ from .logcosh import LogCoshLoss
 from .loss import get_loss_function
 from .mae import MAELoss
 from .mse import MSELoss
+from .mixture_ce import MixtureCrossEntropyLoss
 from .multiscale import MultiscaleLossWrapper
 from .rmse import RMSELoss
 from .spectral import FourierCorrelationLoss
@@ -37,6 +38,7 @@ __all__ = [
     "LossVariableMapper",
     "MAELoss",
     "MSELoss",
+    "MixtureCrossEntropyLoss",
     "MultiscaleLossWrapper",
     "RMSELoss",
     "SpectralAMSELoss",
