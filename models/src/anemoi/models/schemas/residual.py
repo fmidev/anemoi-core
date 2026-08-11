@@ -27,7 +27,9 @@ class SkipConnectionSchema(BaseModel):
         description="Timestep index to use for the skip connection. "
         "Defaults to -1, which selects the most recent timestep.",
     )
-
+    # TODO: could use for other schemas as well?
+    skip: list[str] = Field(default=[])
+    "Datasets to skip the skip connection residuals for. Defaults to []."
 
 class TruncationConfigDiskSchema(BaseModel):
     """File-based truncation config: projection matrices loaded from .npz files."""

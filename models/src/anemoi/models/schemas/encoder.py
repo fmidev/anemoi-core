@@ -35,6 +35,8 @@ class GraphTransformerEncoderSchema(TransformerModelComponent):
     "Edge attributes to consider in the encoder features."
     qk_norm: bool = Field(example=False)
     "Normalize the query and key vectors. Default to False."
+    skip: list[str] = Field(default=[])
+    "Datasets to skip the encoder for. Defaults to []."
 
     @model_validator(mode="after")
     def check_valid_extras(self) -> Any:

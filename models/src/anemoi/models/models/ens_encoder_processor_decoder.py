@@ -68,7 +68,7 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
     def _calculate_input_dim(self, dataset_name: str) -> int:
         base_input_dim = super()._calculate_input_dim(dataset_name)
         base_input_dim += 1  # for forecast step (fcstep)
-        if self.condition_on_residual:
+        if self.condition_on_residual and dataset_name not in self.residuals_to_skip:
             base_input_dim += self.num_input_channels_prognostic[dataset_name]
         return base_input_dim
 
@@ -85,12 +85,16 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         node_attributes_data = self.node_attributes(dataset_name, batch_size=batch_ens_size)
         grid_shard_sizes = grid_shard_sizes[dataset_name] if grid_shard_sizes is not None else None
 
-        x_skip = self.residual[dataset_name](
-            x,
-            grid_shard_sizes=grid_shard_sizes,
-            model_comm_group=model_comm_group,
-            n_step_output=self.n_step_output,
-        )
+        # TODO: return type hints incorrect for x_skip none
+        if dataset_name in self.residuals_to_skip:
+            x_skip = None
+        else:
+            x_skip = self.residual[dataset_name](
+                x,
+                grid_shard_sizes=grid_shard_sizes,
+                model_comm_group=model_comm_group,
+                n_step_output=self.n_step_output,
+            )
 
         if grid_shard_sizes is not None:
             node_attributes_data = shard_tensor(node_attributes_data, 0, grid_shard_sizes, model_comm_group)
@@ -105,7 +109,7 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             dim=-1,  # feature dimension
         )
 
-        if self.condition_on_residual:
+        if self.condition_on_residual and x_skip is not None:
             x_skip_cond = x_skip[:, 0] if x_skip.ndim == 5 else x_skip
             x_data_latent = torch.cat(
                 (
@@ -141,11 +145,12 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
 
         # residual connection (just for the prognostic variables)
         assert dataset_name is not None, "dataset_name must be provided for multi-dataset case"
-        assert x_skip.ndim == 5, "Residual must be (batch, time, ensemble, grid, vars)."
-        assert (
-            x_skip.shape[1] == x_out.shape[1]
-        ), f"Residual time dimension ({x_skip.shape[1]}) must match output time dimension ({x_out.shape[1]})."
-        x_out[..., self._internal_output_idx[dataset_name]] += x_skip[..., self._internal_input_idx[dataset_name]]
+        if dataset_name not in self.residuals_to_skip:
+            assert x_skip.ndim == 5, "Residual must be (batch, time, ensemble, grid, vars)."
+            assert (
+                x_skip.shape[1] == x_out.shape[1]
+            ), f"Residual time dimension ({x_skip.shape[1]}) must match output time dimension ({x_out.shape[1]})."
+            x_out[..., self._internal_output_idx[dataset_name]] += x_skip[..., self._internal_input_idx[dataset_name]]
 
         for bounding in self.boundings[dataset_name]:
             # bounding performed in the order specified in the config file
@@ -218,33 +223,34 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             x_skip_dict[dataset_name] = x_skip
             shard_sizes_data_dict[dataset_name] = shard_sizes_data
 
-            (
-                encoder_edge_attr,
-                encoder_edge_index,
-                enc_edge_shard_sizes,
-            ) = self.encoder_graph_provider[dataset_name].get_edges(
-                batch_size=batch_ens_size,
-                model_comm_group=model_comm_group,
-            )
+            if dataset_name not in self.encoders_to_skip:
+                (
+                    encoder_edge_attr,
+                    encoder_edge_index,
+                    enc_edge_shard_sizes,
+                ) = self.encoder_graph_provider[dataset_name].get_edges(
+                    batch_size=batch_ens_size,
+                    model_comm_group=model_comm_group,
+                )
 
-            enc_shard_info = BipartiteGraphShardInfo(
-                src_nodes=shard_sizes_data_dict[dataset_name],  # None if not sharded
-                dst_nodes=shard_sizes_hidden,
-                edges=enc_edge_shard_sizes,
-            )
+                enc_shard_info = BipartiteGraphShardInfo(
+                    src_nodes=shard_sizes_data_dict[dataset_name],  # None if not sharded
+                    dst_nodes=shard_sizes_hidden,
+                    edges=enc_edge_shard_sizes,
+                )
 
-            # Encoder for this dataset
-            x_data_latent, x_latent = self.encoder[dataset_name](
-                (x_data_latent, x_hidden_latent),
-                batch_size=batch_ens_size,
-                shard_info=enc_shard_info,
-                edge_attr=encoder_edge_attr,
-                edge_index=encoder_edge_index,
-                model_comm_group=model_comm_group,
-                keep_x_dst_sharded=True,  # always keep x_latent sharded for the processor
-            )
+                # Encoder for this dataset
+                x_data_latent, x_latent = self.encoder[dataset_name](
+                    (x_data_latent, x_hidden_latent),
+                    batch_size=batch_ens_size,
+                    shard_info=enc_shard_info,
+                    edge_attr=encoder_edge_attr,
+                    edge_index=encoder_edge_index,
+                    model_comm_group=model_comm_group,
+                    keep_x_dst_sharded=True,  # always keep x_latent sharded for the processor
+                )
+                dataset_latents[dataset_name] = x_latent
             x_data_latent_dict[dataset_name] = x_data_latent
-            dataset_latents[dataset_name] = x_latent
 
         # Combine all dataset latents
         x_latent = sum(dataset_latents.values())

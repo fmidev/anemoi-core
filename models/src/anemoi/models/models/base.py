@@ -71,6 +71,17 @@ class BaseGraphModel(nn.Module):
         self.dataset_names = list(data_indices.keys())
         self._graph_name_hidden = model_config.model.model.hidden_nodes_name
 
+        # TODO: schema should already provide a default for this?
+        if "encoder" in model_config.model and "skip" in model_config.model.encoder:
+            self.encoders_to_skip = model_config.model.encoder.skip
+        else:
+            self.encoders_to_skip = []
+
+        if "residual" in model_config.model and "skip" in model_config.model.residual:
+            self.residuals_to_skip = model_config.model.residual.skip
+        else:
+            self.residuals_to_skip = []
+
         self.num_channels = model_config.model.num_channels
         self.latent_skip = model_config.model.model.latent_skip
 
@@ -246,6 +257,8 @@ class BaseGraphModel(nn.Module):
         fused = uses_fused_dataset_graph(self._graph_data, self.dataset_names)
         sparse_projector_num_chunks = sparse_projector_config.get("num_chunks", 1)
         for dataset_name in self.dataset_names:
+            if dataset_name in self.residuals_to_skip:
+                continue
             data_node_name = dataset_name if fused else DEFAULT_DATASET_NAME
             self.residual[dataset_name] = instantiate(
                 residual_config,
