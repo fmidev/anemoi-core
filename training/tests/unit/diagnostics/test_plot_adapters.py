@@ -12,6 +12,7 @@ import torch
 
 from anemoi.training.tasks import Autoencoder
 from anemoi.training.tasks import Forecaster
+from anemoi.training.tasks import PredictiveAutoencoder
 from anemoi.training.tasks import TemporalDownscaler
 
 
@@ -72,3 +73,19 @@ def test_autoencoder_adapter() -> None:
     assert isinstance(y_true, torch.Tensor) and y_true.shape == (grid_size, num_vars)
     assert isinstance(y_pred, torch.Tensor) and y_pred.shape == (grid_size, num_vars)
     assert isinstance(suffix, str) and suffix.startswith("recon")
+
+
+def test_predictive_autoencoder_adapter_orders_reconstruction_then_forecast() -> None:
+    task = PredictiveAutoencoder(timestep="6H", forecast_steps=1)
+    adapter = task._plot_adapter
+    grid_size = 20
+    num_vars = 4
+    batch = torch.randn(3, 1, grid_size, num_vars)
+    prediction = torch.randn(2, 1, grid_size, num_vars)
+
+    samples = list(adapter.iter_plot_samples(batch, prediction))
+
+    assert [sample[3] for sample in samples] == ["recon", "forecast01"]
+    torch.testing.assert_close(samples[0][0], batch[1].squeeze())
+    torch.testing.assert_close(samples[0][1], batch[1].squeeze())
+    torch.testing.assert_close(samples[1][1], batch[2].squeeze())

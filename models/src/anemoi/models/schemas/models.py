@@ -62,6 +62,10 @@ class DefinedModels(str, Enum):
     ANEMOI_TRANSPORT_TEND_MODEL_ENC_PROC_DEC_SHORT = "anemoi.models.models.AnemoiTransportTendModelEncProcDec"
     ANEMOI_MODEL_AUTOENCODER = "anemoi.models.models.autoencoder.AnemoiModelAutoEncoder"
     ANEMOI_MODEL_AUTOENCODER_SHORT = "anemoi.models.models.AnemoiModelAutoEncoder"
+    ANEMOI_MODEL_PREDICTIVE_AUTOENCODER = (
+        "anemoi.models.models.predictive_autoencoder.AnemoiModelPredictiveAutoEncoder"
+    )
+    ANEMOI_MODEL_PREDICTIVE_AUTOENCODER_SHORT = "anemoi.models.models.AnemoiModelPredictiveAutoEncoder"
     ANEMOI_MODEL_HIER_AUTOENCODER = "anemoi.models.models.autoencoder.AnemoiModelHierarchicalAutoEncoder"
     ANEMOI_MODEL_HIER_AUTOENCODER_SHORT = "anemoi.models.models.AnemoiModelHierarchicalAutoEncoder"
 
@@ -73,8 +77,26 @@ class Model(BaseModel):
     "Name of the hidden nodes. If the model is hierarchical, it can be a list of names for each level."
     latent_skip: bool = Field(default=True)
     "Add skip connection in latent space before/after processor."
+    expected_num_forcing_fields: PositiveInt | None = Field(default=None)
+    "Optional startup assertion for the number of forcing fields."
+    expected_num_prognostic_fields: PositiveInt | None = Field(default=None)
+    "Optional startup assertion for the number of prognostic fields."
+    require_bottleneck: bool = Field(default=False)
+    "Require fewer persistent latent scalars than physical prognostic scalars."
     convert_: str = Field("none", alias="_convert_")
     "Keep OmegaConf containers when instantiating — model code uses attribute-style access throughout."
+
+
+class LatentTemporalMixerSchema(BaseModel):
+    """Point-wise fusion of two persistent states and target-time forcing context."""
+
+    target_: Literal["anemoi.models.layers.temporal.LatentTemporalMixer"] = Field(..., alias="_target_")
+    mlp_hidden_ratio: PositiveFloat = Field(default=2.0)
+    n_extra_layers: NonNegativeInt = Field(default=0)
+    final_activation: bool = Field(default=False)
+    layer_norm: bool = Field(default=True)
+    mlp_implementation: Literal["mlp", "glu", "swiglu", "geglu", "reglu"] = Field(default="mlp")
+    layer_kernels: dict[str, dict] | None = Field(default_factory=dict)
 
 
 class SparseProjectorSchema(BaseModel):
@@ -286,6 +308,19 @@ class BaseModelSchema(PydanticBaseModel):
         discriminator="target_",
     )
     "GNN encoder schema."
+    forcing_encoder: Union[
+        GNNEncoderSchema,
+        GraphTransformerEncoderSchema,
+        TransformerEncoderSchema,
+        PointWiseForwardMapperSchema,
+        None,
+    ] = Field(
+        default=None,
+        discriminator="target_",
+    )
+    "Optional forcing-only encoder used by predictive latent models."
+    temporal_mixer: LatentTemporalMixerSchema | None = Field(default=None)
+    "Optional point-wise temporal mixer configuration used by predictive latent models."
     decoder: Union[
         GNNDecoderSchema,
         GraphTransformerDecoderSchema,

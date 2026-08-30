@@ -140,6 +140,30 @@ class AutoencoderPlotAdapter(BasePlotAdapter):
         yield sample, sample, recon, "recon"
 
 
+class PredictiveAutoencoderPlotAdapter(BasePlotAdapter):
+    """Plot reconstruction and increasing latent-rollout lead times."""
+
+    def get_init_step(self) -> int:
+        return 1
+
+    def iter_plot_samples(self, data: Any, output_tensor: Any) -> Iterator[tuple[Any, Any, Any, str]]:
+        input_time_indices = self._task.get_batch_input_indices()
+        output_time_indices = self._task.get_batch_output_indices()
+        x = data[input_time_indices[self.get_init_step()], ...].squeeze()
+
+        for output_step, batch_time_index in enumerate(output_time_indices):
+            y_true = data[batch_time_index, ...].squeeze()
+            y_pred = output_tensor[output_step, ...]
+            y_pred = y_pred.squeeze() if hasattr(y_pred, "squeeze") else y_pred
+            suffix = "recon" if output_step == 0 else f"forecast{output_step:02d}"
+            yield x, y_true, y_pred, suffix
+
+    def prepare_plot_output_tensor(self, output_tensor: Any) -> Any:
+        if getattr(output_tensor, "ndim", 0) == 5 and getattr(output_tensor, "shape", (0,))[0] == 1:
+            return output_tensor.squeeze(0)
+        return output_tensor
+
+
 class EnsemblePlotAdapterWrapper(BasePlotAdapter):
     """Wraps any task-specific adapter, adding ensemble member handling.
 

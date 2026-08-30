@@ -8,11 +8,13 @@
 # nor does it submit to any jurisdiction.
 
 from .forecaster import Forecaster
+from .predictive_autoencoder import PredictiveAutoencoder
 from .temporal_downscaler import TemporalDownscaler
 from .timeless import Autoencoder
 
 __all__ = [
     "Autoencoder",
     "Forecaster",
+    "PredictiveAutoencoder",
     "TemporalDownscaler",
 ]
