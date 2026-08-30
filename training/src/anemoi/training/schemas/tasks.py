@@ -70,6 +70,17 @@ class AutoencoderTaskSchema(BaseModel):
     "Task class path for the autoencoding task."
 
 
+class PredictiveAutoencoderTaskSchema(BaseModel):
+    """Configuration for predictive autoencoding tasks."""
+
+    target_: Literal["anemoi.training.tasks.PredictiveAutoencoder"] = Field(..., alias="_target_")
+    "Task class path for the predictive autoencoding task."
+    timestep: str = Field(default="6H", example="6H")
+    "Spacing between history and forecast valid times."
+    forecast_steps: PositiveInt = Field(default=1, example=1)
+    "Number of future snapshots rolled out inside one model call."
+
+
 class TemporalDownscalerSchema(BaseModel):
     """Configuration for temporal downscaling task."""
 
@@ -86,6 +97,6 @@ class TemporalDownscalerSchema(BaseModel):
 
 
 TaskSchema = Annotated[
-    ForecasterSchema | OffsetForecasterSchema | AutoencoderTaskSchema | TemporalDownscalerSchema,
+    ForecasterSchema | OffsetForecasterSchema | AutoencoderTaskSchema | PredictiveAutoencoderTaskSchema | TemporalDownscalerSchema,
     Discriminator("target_"),
 ]
