@@ -228,6 +228,34 @@ def test_shared_encoder_runs_only_for_the_two_history_snapshots() -> None:
     assert forcing_encoder_calls == 2
 
 
+def test_static_forcing_encoder_runs_once_per_forward() -> None:
+    config = _model_config()
+    config.model.static_forcing_variables = ["forcing"]
+    config.model.temporal_forcing_variables = []
+    config.model.static_forcing_context_channels = 1
+    model = AnemoiModelPredictiveAutoEncoder(
+        model_config=config,
+        data_indices=_data_indices(),
+        statistics={"data": {}},
+        n_step_input=4,
+        n_step_output=3,
+        graph_data=_graph(),
+    )
+    static_encoder_calls = 0
+
+    def count_static_encoder(*_args) -> None:
+        nonlocal static_encoder_calls
+        static_encoder_calls += 1
+
+    hook = model.static_forcing_encoder["data"].register_forward_hook(count_static_encoder)
+    try:
+        model(_input(2))
+    finally:
+        hook.remove()
+
+    assert static_encoder_calls == 1
+
+
 def test_reconstruction_and_forecast_losses_reach_expected_modules() -> None:
     model = _make_model(forecast_steps=2)
     output = model(_input(2))["data"]

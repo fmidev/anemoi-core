@@ -93,6 +93,8 @@ class LatentTemporalMixerSchema(BaseModel):
     """Point-wise fusion of two persistent states and target-time forcing context."""
 
     target_: Literal["anemoi.models.layers.temporal.LatentTemporalMixer"] = Field(..., alias="_target_")
+    context_channels: PositiveInt | None = Field(default=None)
+    """Number of channels in the concatenated forcing/observation context."""
     mlp_hidden_ratio: PositiveFloat = Field(default=2.0)
     n_extra_layers: NonNegativeInt = Field(default=0)
     final_activation: bool = Field(default=False)
@@ -218,6 +220,14 @@ class DecodersSchema(BaseModel):
 
 
 class BaseModelSchema(PydanticBaseModel):
+    static_forcing_variables: list[str] | None = Field(default=None)
+    """Forcing variables encoded once and reused for all forecast steps."""
+    temporal_forcing_variables: list[str] | None = Field(default=None)
+    """Forcing variables encoded separately for each target forecast time."""
+    static_forcing_context_channels: PositiveInt | None = Field(default=None)
+    """Output width of the static forcing encoder."""
+    temporal_forcing_context_channels: PositiveInt | None = Field(default=None)
+    """Output width of the temporal forcing encoder."""
     keep_batch_sharded: bool = Field(default=True)
     "Keep the input batch and the output of the model sharded"
     sparse_projector: SparseProjectorSchema = Field(default_factory=SparseProjectorSchema)
