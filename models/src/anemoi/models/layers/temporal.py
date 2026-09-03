@@ -24,6 +24,7 @@ class LatentTemporalMixer(nn.Module):
         self,
         *,
         num_channels: int,
+        context_channels: int | None = None,
         mlp_hidden_ratio: float,
         layer_kernels: DotDict,
         n_extra_layers: int = 0,
@@ -33,8 +34,10 @@ class LatentTemporalMixer(nn.Module):
     ) -> None:
         super().__init__()
         layer_factory = load_layer_kernels(layer_kernels)
+        if context_channels is None:
+            context_channels = num_channels
         self.mlp = MLP(
-            in_features=3 * num_channels,
+            in_features=2 * num_channels + context_channels,
             hidden_dim=compute_mlp_hidden_dim(num_channels, mlp_hidden_ratio),
             out_features=num_channels,
             n_extra_layers=n_extra_layers,
@@ -51,9 +54,9 @@ class LatentTemporalMixer(nn.Module):
         target_context: torch.Tensor,
     ) -> torch.Tensor:
         """Return a channel-preserving fusion on each local hidden node."""
-        if previous.shape != current.shape or current.shape != target_context.shape:
+        if previous.shape != current.shape or current.shape[:-1] != target_context.shape[:-1]:
             raise ValueError(
-                "LatentTemporalMixer inputs must have identical shapes; "
+                "LatentTemporalMixer inputs must have matching node dimensions and equal state shapes; "
                 f"got previous={tuple(previous.shape)}, current={tuple(current.shape)}, "
                 f"target_context={tuple(target_context.shape)}."
             )
