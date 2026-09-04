@@ -1,0 +1,267 @@
+defaults:
+- data: zarr
+- dataloader: native_grid
+- diagnostics: evaluation
+- system: example
+- graph: predictive_n320
+- model: graphtransformer
+- task: predictive_autoencoder
+- training: single
+- _self_
+
+config_validation: True
+
+# Set these three variables before composing or launching this configuration:
+# ANEMOI_ERA5_DATASET, ANEMOI_AUTOENCODER_GRAPH, ANEMOI_AUTOENCODER_OUTPUT.
+system:
+  input:
+    dataset: ${oc.env:ANEMOI_ERA5_DATASET}
+    graph: ${oc.env:ANEMOI_AUTOENCODER_GRAPH}
+    warm_start: null
+  output:
+    root: ${oc.env:ANEMOI_AUTOENCODER_OUTPUT}
+
+data:
+  frequency: 6h
+  datasets:
+    data:
+      forcing:
+      - cos_latitude
+      - cos_longitude
+      - sin_latitude
+      - sin_longitude
+      - cos_julian_day
+      - cos_local_time
+      - sin_julian_day
+      - sin_local_time
+      - insolation
+      - lsm
+      - z
+      diagnostic: []
+      processors:
+        normalizer:
+          _target_: anemoi.models.preprocessing.normalizer.InputNormalizer
+          config:
+            default: mean-std
+            std: []
+            min-max: []
+            max:
+            - z
+            none:
+            - cos_latitude
+            - cos_longitude
+            - sin_latitude
+            - sin_longitude
+            - cos_julian_day
+            - cos_local_time
+            - sin_julian_day
+            - sin_local_time
+            - insolation
+            - lsm
+
+dataloader:
+  dataset:
+    dataset: ${system.input.dataset}
+    select:
+    - cos_latitude
+    - cos_longitude
+    - sin_latitude
+    - sin_longitude
+    - cos_julian_day
+    - cos_local_time
+    - sin_julian_day
+    - sin_local_time
+    - insolation
+    - lsm
+    - z
+    - sp
+    - q_50
+    - q_100
+    - q_150
+    - q_200
+    - q_250
+    - q_300
+    - q_400
+    - q_500
+    - q_700
+    - q_850
+    - q_925
+    - q_1000
+    - t_50
+    - t_100
+    - t_150
+    - t_200
+    - t_250
+    - t_300
+    - t_400
+    - t_500
+    - t_700
+    - t_850
+    - t_925
+    - t_1000
+    - u_50
+    - u_100
+    - u_150
+    - u_200
+    - u_250
+    - u_300
+    - u_400
+    - u_500
+    - u_700
+    - u_850
+    - u_925
+    - u_1000
+    - v_50
+    - v_100
+    - v_150
+    - v_200
+    - v_250
+    - v_300
+    - v_400
+    - v_500
+    - v_700
+    - v_850
+    - v_925
+    - v_1000
+    - w_50
+    - w_100
+    - w_150
+    - w_200
+    - w_250
+    - w_300
+    - w_400
+    - w_500
+    - w_700
+    - w_850
+    - w_925
+    - w_1000
+    - z_50
+    - z_100
+    - z_150
+    - z_200
+    - z_250
+    - z_300
+    - z_400
+    - z_500
+    - z_700
+    - z_850
+    - z_925
+    - z_1000
+
+task:
+  timestep: 6H
+  forecast_steps: 1
+
+graph:
+  overwrite: False
+
+model:
+  num_channels: 128
+  # Forcing context is projected independently from the persistent state latent.
+  # Static context is encoded once per forward call; temporal context is encoded per target time.
+  static_forcing_variables:
+  - cos_latitude
+  - cos_longitude
+  - sin_latitude
+  - sin_longitude
+  - lsm
+  - z
+  temporal_forcing_variables:
+  - cos_julian_day
+  - cos_local_time
+  - sin_julian_day
+  - sin_local_time
+  - insolation
+  static_forcing_context_channels: 64
+  temporal_forcing_context_channels: 64
+  model:
+    _target_: anemoi.models.models.AnemoiModelPredictiveAutoEncoder
+    hidden_nodes_name: hidden
+    latent_skip: True
+    expected_num_forcing_fields: 11
+    expected_num_prognostic_fields: 73
+    require_bottleneck: True
+  forcing_encoder:
+    _target_: anemoi.models.layers.mapper.GraphTransformerForwardMapper
+    trainable_size: ${model.trainable_parameters.data2hidden}
+    sub_graph_edge_attributes: ${model.attributes.edges}
+    num_chunks: 4
+    mlp_hidden_ratio: 4
+    mlp_implementation: mlp
+    num_heads: 16
+    qk_norm: False
+    cpu_offload: ${model.cpu_offload}
+    gradient_checkpointing: True
+    layer_kernels: ${model.layer_kernels}
+    shard_strategy: edges
+    graph_attention_backend: triton
+    edge_pre_mlp: False
+  state_context_mixer:
+    _target_: anemoi.models.layers.temporal.LatentStateContextMixer
+    mlp_hidden_ratio: 2
+    mlp_implementation: mlp
+    n_extra_layers: 0
+    final_activation: False
+    layer_norm: True
+    layer_kernels: ${model.layer_kernels}
+  bounding: []
+
+training:
+  scalers:
+    datasets:
+      data:
+        stdev_tendency:
+          timestep: 6h
+        var_tendency:
+          timestep: 6h
+        time_steps:
+          _target_: anemoi.training.losses.scalers.TimeStepScaler
+          weights: [1.0, 1.0]
+          norm: unit-sum
+        reconstruction_time:
+          _target_: anemoi.training.losses.scalers.TimeStepScaler
+          weights: [1.0, 0.0]
+          norm: unit-sum
+        forecast_time:
+          _target_: anemoi.training.losses.scalers.TimeStepScaler
+          weights: [0.0, 1.0]
+          norm: unit-sum
+  validation_metrics:
+    datasets:
+      data:
+        reconstruction_mse:
+          _target_: anemoi.training.losses.MSELoss
+          scalers: [node_weights, reconstruction_time]
+          ignore_nans: False
+        forecast_mse:
+          _target_: anemoi.training.losses.MSELoss
+          scalers: [node_weights, forecast_time]
+          ignore_nans: False
+  metrics:
+    datasets:
+      data:
+      - q_500
+      - t_850
+      - u_850
+      - v_850
+      - w_500
+      - z_500
+      - sp
+
+diagnostics:
+  log:
+    mlflow:
+      enabled: False
+      tracking_uri: null
+  plot:
+    settings:
+      precip_and_related_fields: []
+    parameters:
+    - q_500
+    - t_850
+    - u_850
+    - v_850
+    - w_500
+    - z_500
+    - sp
+    callbacks: []

@@ -56,8 +56,8 @@ def _model_config(*, latent_skip: bool = True, require_bottleneck: bool = True) 
                     "mlp_hidden_ratio": 2,
                     "dropout_p": 0.0,
                 },
-                "temporal_mixer": {
-                    "_target_": "anemoi.models.layers.temporal.LatentTemporalMixer",
+                "state_context_mixer": {
+                    "_target_": "anemoi.models.layers.temporal.LatentStateContextMixer",
                     "mlp_hidden_ratio": 2,
                     "n_extra_layers": 0,
                     "final_activation": False,
@@ -103,21 +103,28 @@ def _make_model(
     *,
     latent_skip: bool = True,
     require_bottleneck: bool = True,
+    use_previous_state: bool = True,
 ) -> AnemoiModelPredictiveAutoEncoder:
     torch.manual_seed(7)
     return AnemoiModelPredictiveAutoEncoder(
         model_config=_model_config(latent_skip=latent_skip, require_bottleneck=require_bottleneck),
         data_indices=_data_indices(),
         statistics={"data": {}},
-        n_step_input=forecast_steps + 2,
+        n_step_input=forecast_steps + 1 + int(use_previous_state),
         n_step_output=forecast_steps + 1,
         graph_data=_graph(),
     )
 
 
-def _input(forecast_steps: int, *, requires_grad: bool = False) -> dict[str, torch.Tensor]:
+def _input(
+    forecast_steps: int,
+    *,
+    requires_grad: bool = False,
+    use_previous_state: bool = True,
+) -> dict[str, torch.Tensor]:
     torch.manual_seed(11)
-    return {"data": torch.randn(2, forecast_steps + 2, 1, 4, 4, requires_grad=requires_grad)}
+    num_input_steps = forecast_steps + 1 + int(use_previous_state)
+    return {"data": torch.randn(2, num_input_steps, 1, 4, 4, requires_grad=requires_grad)}
 
 
 def _nonzero_gradient(parameters: Iterator[torch.nn.Parameter]) -> bool:
@@ -125,13 +132,53 @@ def _nonzero_gradient(parameters: Iterator[torch.nn.Parameter]) -> bool:
 
 
 @pytest.mark.parametrize("forecast_steps", [1, 2])
-def test_output_shape_and_time_order(forecast_steps: int) -> None:
-    model = _make_model(forecast_steps)
-    inputs = _input(forecast_steps)
+@pytest.mark.parametrize("use_previous_state", [True, False])
+def test_output_shape_and_time_order(forecast_steps: int, use_previous_state: bool) -> None:
+    model = _make_model(forecast_steps, use_previous_state=use_previous_state)
+    inputs = _input(forecast_steps, use_previous_state=use_previous_state)
 
     output = model(inputs)["data"]
 
     assert output.shape == (2, forecast_steps + 1, 1, 4, 3)
+
+
+def test_current_analysis_only_matches_explicit_reconstruction_then_transition_decode() -> None:
+    model = _make_model(use_previous_state=False)
+    model.eval()
+    inputs = _input(1, use_previous_state=False)
+
+    with torch.no_grad():
+        current, shard_sizes = model.encode_snapshot(inputs, 0, batch_size=2)
+        reconstruction = model.decode_snapshot(
+            current,
+            inputs,
+            0,
+            batch_size=2,
+            ensemble_size=1,
+            shard_sizes_hidden=shard_sizes,
+            in_out_sharded={"data": False},
+        )["data"]
+        context, _ = model.encode_forcing_context(inputs, 1, batch_size=2)
+        predicted = model.transition_latent(
+            None,
+            current,
+            context,
+            batch_size=2,
+            shard_sizes_hidden=shard_sizes,
+        )
+        forecast = model.decode_snapshot(
+            predicted,
+            inputs,
+            1,
+            batch_size=2,
+            ensemble_size=1,
+            shard_sizes_hidden=shard_sizes,
+            in_out_sharded={"data": False},
+        )["data"]
+        output = model(inputs)["data"]
+
+    torch.testing.assert_close(output[:, :1], reconstruction)
+    torch.testing.assert_close(output[:, 1:], forecast)
 
 
 def test_forward_matches_explicit_reconstruction_then_transition_decode() -> None:
@@ -228,6 +275,23 @@ def test_shared_encoder_runs_only_for_the_two_history_snapshots() -> None:
     assert forcing_encoder_calls == 2
 
 
+def test_current_analysis_only_encodes_one_state() -> None:
+    model = _make_model(forecast_steps=2, use_previous_state=False)
+    encoder_calls = 0
+
+    def count_encoder(*_args) -> None:
+        nonlocal encoder_calls
+        encoder_calls += 1
+
+    hook = model.encoder["data"].register_forward_hook(count_encoder)
+    try:
+        model(_input(2, use_previous_state=False))
+    finally:
+        hook.remove()
+
+    assert encoder_calls == 1
+
+
 def test_static_forcing_encoder_runs_once_per_forward() -> None:
     config = _model_config()
     config.model.static_forcing_variables = ["forcing"]
@@ -269,7 +333,7 @@ def test_reconstruction_and_forecast_losses_reach_expected_modules() -> None:
     output[:, 1:].square().mean().backward()
     assert _nonzero_gradient(model.encoder.parameters())
     assert _nonzero_gradient(model.forcing_encoder.parameters())
-    assert _nonzero_gradient(model.temporal_mixer.parameters())
+    assert _nonzero_gradient(model.state_context_mixer.parameters())
     assert _nonzero_gradient(model.processor.parameters())
     assert _nonzero_gradient(model.decoder.parameters())
 
@@ -281,7 +345,7 @@ def test_latent_skip_adds_the_current_state_to_transition_delta() -> None:
     current, _ = model.encode_snapshot(inputs, 1, batch_size=2)
     context, _ = model.encode_forcing_context(inputs, 2, batch_size=2)
 
-    mixed = model.temporal_mixer(previous, current, context)
+    mixed = model.state_context_mixer(previous, current, context)
     expected_delta = model.processor(
         x=mixed,
         batch_size=2,
@@ -306,7 +370,16 @@ def test_scalar_bottleneck_statistics_are_exposed() -> None:
     assert statistics["physical_prognostic_scalars_per_snapshot"] == 12
     assert statistics["latent_scalars_per_snapshot"] == 8
     assert statistics["ratio"] == pytest.approx(2 / 3)
+    assert statistics["transition_state_count"] == 2
+    assert statistics["transition_state_scalars"] == 16
     assert statistics["two_state_transition_scalars"] == 16
+
+
+def test_single_state_scalar_statistics_are_exposed() -> None:
+    statistics = _make_model(use_previous_state=False).latent_scalar_statistics["data"]
+
+    assert statistics["transition_state_count"] == 1
+    assert statistics["transition_state_scalars"] == 8
 
 
 def test_model_schema_accepts_predictive_components() -> None:
@@ -316,7 +389,7 @@ def test_model_schema_accepts_predictive_components() -> None:
 
     assert validated.model.target_ == "anemoi.models.models.AnemoiModelPredictiveAutoEncoder"
     assert validated.forcing_encoder is not None
-    assert validated.temporal_mixer is not None
+    assert validated.state_context_mixer is not None
 
 
 def test_noop_transition_processor_is_rejected() -> None:
