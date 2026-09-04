@@ -59,9 +59,11 @@ class PredictiveAutoencoderTaskSchema(BaseModel):
     target_: Literal["anemoi.training.tasks.PredictiveAutoencoder"] = Field(..., alias="_target_")
     "Task class path for the predictive autoencoding task."
     timestep: str = Field(default="6H", example="6H")
-    "Spacing between history and forecast valid times."
+    "Spacing between the current state and forecast valid times."
     forecast_steps: PositiveInt = Field(default=1, example=1)
     "Number of future snapshots rolled out inside one model call."
+    use_previous_state: bool = Field(default=True, example=False)
+    "Whether the state preceding the current analysis is supplied to the latent transition."
 
 
 class TemporalDownscalerSchema(BaseModel):

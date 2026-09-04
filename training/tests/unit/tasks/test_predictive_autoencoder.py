@@ -40,6 +40,19 @@ def test_offsets_and_single_training_step(forecast_steps: int) -> None:
     assert task.num_output_timesteps == forecast_steps + 1
 
 
+def test_current_analysis_only_offsets() -> None:
+    task = PredictiveAutoencoder(timestep="6H", forecast_steps=2, use_previous_state=False)
+
+    assert task.get_input_offsets() == [
+        datetime.timedelta(0),
+        datetime.timedelta(hours=6),
+        datetime.timedelta(hours=12),
+    ]
+    assert task.get_output_offsets() == task.get_input_offsets()
+    assert task.num_input_timesteps == 3
+    assert task.num_output_timesteps == 3
+
+
 def test_future_prognostics_are_masked_but_forcings_are_retained() -> None:
     task = PredictiveAutoencoder(timestep="6H", forecast_steps=2)
     indices = _indices()
@@ -52,6 +65,19 @@ def test_future_prognostics_are_masked_but_forcings_are_retained() -> None:
     torch.testing.assert_close(inputs[:, 2:, ..., 0], original[:, 2:, ..., 0])
     assert torch.count_nonzero(inputs[:, 2:, ..., 1:]) == 0
     torch.testing.assert_close(batch["data"], original)
+
+
+def test_current_analysis_only_masks_all_future_prognostics() -> None:
+    task = PredictiveAutoencoder(timestep="6H", forecast_steps=2, use_previous_state=False)
+    indices = _indices()
+    batch = {"data": torch.arange(1 * 3 * 1 * 2 * 3, dtype=torch.float32).reshape(1, 3, 1, 2, 3)}
+    original = batch["data"].clone()
+
+    inputs = task.get_inputs(batch, indices)["data"]
+
+    torch.testing.assert_close(inputs[:, :1], original[:, :1])
+    torch.testing.assert_close(inputs[:, 1:, ..., 0], original[:, 1:, ..., 0])
+    assert torch.count_nonzero(inputs[:, 1:, ..., 1:]) == 0
 
 
 def test_targets_include_reconstruction_then_forecasts() -> None:
@@ -75,7 +101,23 @@ def test_metadata_records_six_hour_timestep() -> None:
     assert timesteps["output_relative_date_indices"] == [1, 2]
 
 
+def test_metadata_records_current_analysis_only_layout() -> None:
+    task = PredictiveAutoencoder(timestep="6H", forecast_steps=1, use_previous_state=False)
+    metadata = {"metadata_inference": {"dataset_names": ["data"], "data": {}}}
+
+    task.fill_metadata(metadata)
+
+    timesteps = metadata["metadata_inference"]["data"]["timesteps"]
+    assert timesteps["input_relative_date_indices"] == [0, 1]
+    assert timesteps["output_relative_date_indices"] == [0, 1]
+
+
 @pytest.mark.parametrize("forecast_steps", [0, -1, True, 1.5])
 def test_forecast_steps_must_be_a_positive_integer(forecast_steps: object) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         PredictiveAutoencoder(forecast_steps=forecast_steps)  # type: ignore[arg-type]
+
+
+def test_use_previous_state_must_be_boolean() -> None:
+    with pytest.raises(ValueError, match="must be a boolean"):
+        PredictiveAutoencoder(use_previous_state=1)  # type: ignore[arg-type]

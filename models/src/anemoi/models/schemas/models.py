@@ -87,10 +87,10 @@ class Model(BaseModel):
     "Keep OmegaConf containers when instantiating — model code uses attribute-style access throughout."
 
 
-class LatentTemporalMixerSchema(BaseModel):
-    """Point-wise fusion of two persistent states and target-time forcing context."""
+class LatentStateContextMixerSchema(BaseModel):
+    """Point-wise fusion of persistent states and target-time forcing context."""
 
-    target_: Literal["anemoi.models.layers.temporal.LatentTemporalMixer"] = Field(..., alias="_target_")
+    target_: Literal["anemoi.models.layers.temporal.LatentStateContextMixer"] = Field(..., alias="_target_")
     context_channels: PositiveInt | None = Field(default=None)
     """Number of channels in the concatenated forcing/observation context."""
     mlp_hidden_ratio: PositiveFloat = Field(default=2.0)
@@ -329,8 +329,8 @@ class BaseModelSchema(PydanticBaseModel):
         discriminator="target_",
     )
     "Optional forcing-only encoder used by predictive latent models."
-    temporal_mixer: LatentTemporalMixerSchema | None = Field(default=None)
-    "Optional point-wise temporal mixer configuration used by predictive latent models."
+    state_context_mixer: LatentStateContextMixerSchema | None = Field(default=None)
+    "Optional point-wise state-context mixer configuration used by predictive latent models."
     decoder: Union[
         GNNDecoderSchema,
         GraphTransformerDecoderSchema,
