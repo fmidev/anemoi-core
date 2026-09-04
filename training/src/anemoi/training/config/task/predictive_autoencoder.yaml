@@ -1,0 +1,4 @@
+_target_: anemoi.training.tasks.PredictiveAutoencoder
+timestep: 6H
+forecast_steps: 1
+use_previous_state: True

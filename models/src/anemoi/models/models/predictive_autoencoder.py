@@ -36,7 +36,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
-    """Encode snapshots independently and evolve a two-state persistent latent.
+    """Encode snapshots independently and evolve a persistent latent state.
 
     ``latent_skip`` controls the transition residual: when enabled, the shared
     processor predicts a delta that is added to the latest persistent latent.
@@ -55,11 +55,17 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
     ) -> None:
         if n_step_output < 2:
             raise ValueError("Predictive autoencoding requires reconstruction plus at least one forecast output.")
-        if n_step_input != n_step_output + 1:
+        if n_step_input == n_step_output:
+            self.use_previous_state = False
+        elif n_step_input == n_step_output + 1:
+            self.use_previous_state = True
+        else:
             raise ValueError(
-                "Predictive autoencoder input must contain two history snapshots and one forcing snapshot per "
-                f"forecast step; got n_step_input={n_step_input}, n_step_output={n_step_output}."
+                "Predictive autoencoder input must contain the current state, optional preceding state, and one "
+                "forcing snapshot per forecast step; expected n_step_input to equal n_step_output or "
+                f"n_step_output + 1, got n_step_input={n_step_input}, n_step_output={n_step_output}."
             )
+        self.current_time_index = int(self.use_previous_state)
 
         model_settings = model_config.model.model
         self.expected_num_forcing_fields = model_settings.get("expected_num_forcing_fields")
@@ -105,7 +111,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         return self.num_output_channels[dataset_name]
 
     def _build_networks(self, model_config: DotDict) -> None:
-        """Build the shared codec, forcing mapper, temporal mixer, and transition processor."""
+        """Build the shared codec, forcing mapper, state-context mixer, and transition processor."""
         super()._build_networks(model_config)
         if isinstance(self.processor, NoOpProcessor):
             raise TypeError("Predictive autoencoding requires a real latent transition processor, not NoOpProcessor.")
@@ -140,13 +146,14 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                     self.static_forcing_encoder,
                 )
 
-        temporal_mixer_config = model_config.model.get("temporal_mixer")
-        if temporal_mixer_config is None:
-            raise ValueError("Predictive autoencoder configuration must define model.temporal_mixer.")
-        self.temporal_mixer = instantiate(
-            temporal_mixer_config,
+        state_context_mixer_config = model_config.model.get("state_context_mixer")
+        if state_context_mixer_config is None:
+            raise ValueError("Predictive autoencoder configuration must define model.state_context_mixer.")
+        self.state_context_mixer = instantiate(
+            state_context_mixer_config,
             _recursive_=False,
             num_channels=self.num_channels,
+            num_state_inputs=1 + int(self.use_previous_state),
             context_channels=(
                 self.num_channels
                 if not self._forcing_split_configured
@@ -430,7 +437,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
             return None, None
         return self._encode_forcing_group(
             x,
-            1,
+            self.current_time_index,
             batch_size=batch_size,
             model_comm_group=model_comm_group,
             grid_shard_sizes=grid_shard_sizes,
@@ -494,7 +501,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
 
     def transition_latent(
         self,
-        previous: Tensor,
+        previous: Tensor | None,
         current: Tensor,
         target_context: Tensor,
         *,
@@ -503,7 +510,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         model_comm_group: ProcessGroup | None = None,
     ) -> Tensor:
         """Apply one shared, forcing-conditioned hidden-grid transition."""
-        mixed = self.temporal_mixer(previous, current, target_context)
+        mixed = self.state_context_mixer(previous, current, target_context)
         edge_attr, edge_index, edge_shard_sizes = self.processor_graph_provider.get_edges(
             batch_size=batch_size,
             model_comm_group=model_comm_group,
@@ -584,28 +591,31 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
 
         batch_size = self._get_consistent_dim(x, 0)
         ensemble_size = self._get_consistent_dim(x, 2)
-        expected_input_steps = self.forecast_steps + 2
+        expected_input_steps = self.forecast_steps + self.current_time_index + 1
+        expected_offsets = "[-timestep, 0, +timestep, ...]" if self.use_previous_state else "[0, +timestep, ...]"
         for dataset_name in dataset_names:
             if x[dataset_name].shape[1] != expected_input_steps:
                 raise ValueError(
                     f"Dataset '{dataset_name}' must provide {expected_input_steps} time steps "
-                    f"[-timestep, 0, +timestep, ...], got {x[dataset_name].shape[1]}."
+                    f"{expected_offsets}, got {x[dataset_name].shape[1]}."
                 )
 
         in_out_sharded = self._resolve_in_out_sharded(dataset_names, grid_shard_sizes)
         for dataset_name in dataset_names:
             self._assert_valid_sharding(batch_size, ensemble_size, in_out_sharded[dataset_name], model_comm_group)
 
-        previous, shard_sizes_hidden = self.encode_snapshot(
+        previous = None
+        if self.use_previous_state:
+            previous, shard_sizes_hidden = self.encode_snapshot(
+                x,
+                0,
+                batch_size=batch_size,
+                model_comm_group=model_comm_group,
+                grid_shard_sizes=grid_shard_sizes,
+            )
+        current, shard_sizes_hidden = self.encode_snapshot(
             x,
-            0,
-            batch_size=batch_size,
-            model_comm_group=model_comm_group,
-            grid_shard_sizes=grid_shard_sizes,
-        )
-        current, _ = self.encode_snapshot(
-            x,
-            1,
+            self.current_time_index,
             batch_size=batch_size,
             model_comm_group=model_comm_group,
             grid_shard_sizes=grid_shard_sizes,
@@ -614,7 +624,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         reconstruction = self.decode_snapshot(
             current,
             x,
-            1,
+            self.current_time_index,
             batch_size=batch_size,
             ensemble_size=ensemble_size,
             shard_sizes_hidden=shard_sizes_hidden,
@@ -632,7 +642,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         )
 
         for forecast_step in range(self.forecast_steps):
-            target_time_index = forecast_step + 2
+            target_time_index = forecast_step + self.current_time_index + 1
             target_context, _ = self.encode_forcing_context(
                 x,
                 target_time_index,
@@ -662,7 +672,8 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
             )
             for dataset_name in dataset_names:
                 outputs[dataset_name].append(forecast[dataset_name])
-            previous, current = current, predicted
+            previous = current if self.use_previous_state else None
+            current = predicted
 
         return {dataset_name: torch.cat(dataset_outputs, dim=1) for dataset_name, dataset_outputs in outputs.items()}
 
@@ -695,7 +706,8 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                     "requires at least one prognostic field and one data node."
                 )
             ratio = latent_scalars / physical_scalars
-            two_state_scalars = 2 * latent_scalars
+            transition_state_count = 1 + int(self.use_previous_state)
+            transition_state_scalars = transition_state_count * latent_scalars
             statistics[dataset_name] = {
                 "physical_nodes": physical_nodes,
                 "prognostic_fields": prognostic_fields,
@@ -704,12 +716,15 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                 "latent_scalars_per_snapshot": latent_scalars,
                 "physical_prognostic_scalars_per_snapshot": physical_scalars,
                 "ratio": ratio,
-                "two_state_transition_scalars": two_state_scalars,
+                "transition_state_count": transition_state_count,
+                "transition_state_scalars": transition_state_scalars,
+                "two_state_transition_scalars": 2 * latent_scalars,
             }
             LOGGER.info(
                 "Predictive autoencoder bottleneck [%s]: physical_nodes=%d, prognostic_fields=%d, "
                 "hidden_nodes=%d, latent_channels=%d, latent_scalars_per_snapshot=%d, "
-                "physical_prognostic_scalars_per_snapshot=%d, ratio=%.6f, two_state_transition_scalars=%d",
+                "physical_prognostic_scalars_per_snapshot=%d, ratio=%.6f, transition_state_count=%d, "
+                "transition_state_scalars=%d",
                 dataset_name,
                 physical_nodes,
                 prognostic_fields,
@@ -718,7 +733,8 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                 latent_scalars,
                 physical_scalars,
                 ratio,
-                two_state_scalars,
+                transition_state_count,
+                transition_state_scalars,
             )
             if self.require_bottleneck and ratio >= 1:
                 raise ValueError(

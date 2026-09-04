@@ -62,6 +62,7 @@ def test_reference_config_composes_validates_and_selects_exact_fields(monkeypatc
     assert list(config.dataloader.dataset.select) == [*FORCINGS, *PROGNOSTICS]
     assert len(config.dataloader.dataset.select) == 84
     assert config.task.forecast_steps == 1
+    assert config.task.use_previous_state is True
     assert config.graph.nodes.data.node_builder._target_.endswith("ReducedGaussianGridNodes")
     assert config.graph.nodes.data.node_builder.grid == "n320"
     assert config.graph.nodes.hidden.node_builder.resolution == 5
