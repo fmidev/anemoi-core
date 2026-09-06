@@ -60,8 +60,8 @@ class PredictiveAutoencoderTaskSchema(BaseModel):
     "Task class path for the predictive autoencoding task."
     timestep: str = Field(default="6H", example="6H")
     "Spacing between the current state and forecast valid times."
-    forecast_steps: PositiveInt = Field(default=1, example=1)
-    "Number of future snapshots rolled out inside one model call."
+    forecast_steps: NonNegativeInt = Field(default=1, example=1)
+    "Number of future snapshots rolled out inside one model call; zero reconstructs only."
     use_previous_state: bool = Field(default=True, example=False)
     "Whether the state preceding the current analysis is supplied to the latent transition."
 
