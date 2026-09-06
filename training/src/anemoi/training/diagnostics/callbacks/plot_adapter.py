@@ -144,7 +144,7 @@ class PredictiveAutoencoderPlotAdapter(BasePlotAdapter):
     """Plot reconstruction and increasing latent-rollout lead times."""
 
     def get_init_step(self) -> int:
-        return 1
+        return self._task.current_time_index
 
     def iter_plot_samples(self, data: Any, output_tensor: Any) -> Iterator[tuple[Any, Any, Any, str]]:
         input_time_indices = self._task.get_batch_input_indices()

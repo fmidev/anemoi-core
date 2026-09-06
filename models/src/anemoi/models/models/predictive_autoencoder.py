@@ -53,8 +53,8 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         n_step_output: int,
         graph_data: HeteroData,
     ) -> None:
-        if n_step_output < 2:
-            raise ValueError("Predictive autoencoding requires reconstruction plus at least one forecast output.")
+        if n_step_output < 1:
+            raise ValueError("Predictive autoencoding requires at least the reconstruction output.")
         if n_step_input == n_step_output:
             self.use_previous_state = False
         elif n_step_input == n_step_output + 1:
@@ -605,7 +605,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
             self._assert_valid_sharding(batch_size, ensemble_size, in_out_sharded[dataset_name], model_comm_group)
 
         previous = None
-        if self.use_previous_state:
+        if self.use_previous_state and self.forecast_steps:
             previous, shard_sizes_hidden = self.encode_snapshot(
                 x,
                 0,
@@ -632,6 +632,10 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
             model_comm_group=model_comm_group,
             grid_shard_sizes=grid_shard_sizes,
         )
+        # Keep the transition weights in checkpoints, but do not execute any
+        # forecast-only networks during reconstruction-only codec training.
+        if self.forecast_steps == 0:
+            return reconstruction
         outputs = {dataset_name: [reconstruction[dataset_name]] for dataset_name in dataset_names}
 
         static_context, _ = self.encode_static_forcing_context(
