@@ -22,7 +22,7 @@ def _indices() -> dict[str, IndexCollection]:
     return {"data": IndexCollection(config, {"forcing": 0, "state_a": 1, "state_b": 2})}
 
 
-@pytest.mark.parametrize("forecast_steps", [1, 3])
+@pytest.mark.parametrize("forecast_steps", [0, 1, 3])
 def test_offsets_and_single_training_step(forecast_steps: int) -> None:
     task = PredictiveAutoencoder(timestep="6H", forecast_steps=forecast_steps)
 
@@ -112,10 +112,23 @@ def test_metadata_records_current_analysis_only_layout() -> None:
     assert timesteps["output_relative_date_indices"] == [0, 1]
 
 
-@pytest.mark.parametrize("forecast_steps", [0, -1, True, 1.5])
-def test_forecast_steps_must_be_a_positive_integer(forecast_steps: object) -> None:
-    with pytest.raises(ValueError, match="positive integer"):
+@pytest.mark.parametrize("forecast_steps", [-1, True, 1.5])
+def test_forecast_steps_must_be_a_non_negative_integer(forecast_steps: object) -> None:
+    with pytest.raises(ValueError, match="non-negative integer"):
         PredictiveAutoencoder(forecast_steps=forecast_steps)  # type: ignore[arg-type]
+
+
+def test_reconstruction_only_current_state() -> None:
+    task = PredictiveAutoencoder(forecast_steps=0, use_previous_state=False)
+    batch = {"data": torch.randn(2, 1, 1, 2, 3)}
+    assert task.get_input_offsets() == task.get_output_offsets() == [datetime.timedelta(0)]
+    torch.testing.assert_close(task.get_inputs(batch, _indices())["data"], batch["data"])
+    assert task.get_targets(batch)["data"].shape[1] == 1
+    sample = batch["data"][0]
+    plots = list(task._plot_adapter.iter_plot_samples(sample, sample))
+    assert len(plots) == 1
+    assert plots[0][3] == "recon"
+    torch.testing.assert_close(plots[0][0], sample[0].squeeze())
 
 
 def test_use_previous_state_must_be_boolean() -> None:

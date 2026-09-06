@@ -131,7 +131,7 @@ def _nonzero_gradient(parameters: Iterator[torch.nn.Parameter]) -> bool:
     return any(parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0 for parameter in parameters)
 
 
-@pytest.mark.parametrize("forecast_steps", [1, 2])
+@pytest.mark.parametrize("forecast_steps", [0, 1, 2])
 @pytest.mark.parametrize("use_previous_state", [True, False])
 def test_output_shape_and_time_order(forecast_steps: int, use_previous_state: bool) -> None:
     model = _make_model(forecast_steps, use_previous_state=use_previous_state)
@@ -140,6 +140,33 @@ def test_output_shape_and_time_order(forecast_steps: int, use_previous_state: bo
     output = model(inputs)["data"]
 
     assert output.shape == (2, forecast_steps + 1, 1, 4, 3)
+
+
+@pytest.mark.parametrize("use_previous_state", [True, False])
+def test_decoder_finetuning_skips_dynamics_and_preserves_checkpoint_weights(monkeypatch, use_previous_state) -> None:
+    pretrained = _make_model(use_previous_state=use_previous_state)
+    model = _make_model(forecast_steps=0, use_previous_state=use_previous_state)
+    model.load_state_dict(pretrained.state_dict(), strict=True)
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_(name.startswith(("decoder.", "decoder_graph_provider.")))
+
+    def unexpected_call(*args, **kwargs):
+        pytest.fail("Reconstruction-only mode must not execute forecast networks")
+
+    for method in ("encode_static_forcing_context", "encode_forcing_context", "transition_latent"):
+        monkeypatch.setattr(model, method, unexpected_call)
+
+    inputs = _input(1, use_previous_state=use_previous_state)
+    with torch.no_grad():
+        expected = pretrained(inputs)["data"][:, :1]
+    output = model({"data": inputs["data"][:, : 1 + int(use_previous_state)]})["data"]
+    torch.testing.assert_close(output, expected)
+    output.square().mean().backward()
+    assert _nonzero_gradient(model.decoder.parameters())
+    assert all(parameter.grad is None for parameter in model.encoder.parameters())
+    assert all(parameter.grad is None for parameter in model.processor.parameters())
+    # The decoder-only checkpoint can still seed the next forecasting stage.
+    pretrained.load_state_dict(model.state_dict(), strict=True)
 
 
 def test_current_analysis_only_matches_explicit_reconstruction_then_transition_decode() -> None:

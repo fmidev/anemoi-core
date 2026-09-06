@@ -39,8 +39,8 @@ class PredictiveAutoencoder(BaseSingleStepTask):
         use_previous_state: bool = True,
         **kwargs,
     ) -> None:
-        if not isinstance(forecast_steps, int) or isinstance(forecast_steps, bool) or forecast_steps < 1:
-            message = f"forecast_steps must be a positive integer, got {forecast_steps!r}."
+        if not isinstance(forecast_steps, int) or isinstance(forecast_steps, bool) or forecast_steps < 0:
+            message = f"forecast_steps must be a non-negative integer, got {forecast_steps!r}."
             raise ValueError(message)
         if not isinstance(use_previous_state, bool):
             raise ValueError(f"use_previous_state must be a boolean, got {use_previous_state!r}.")
