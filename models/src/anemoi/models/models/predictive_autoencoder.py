@@ -30,12 +30,12 @@ from anemoi.models.distributed.shapes import (
 )
 from anemoi.models.layers.graph_provider import create_graph_provider
 from anemoi.models.layers.processor import NoOpProcessor
-from anemoi.models.models.autoencoder import AnemoiModelAutoEncoder
+from anemoi.models.models.encoder_processor_decoder import AnemoiModelEncProcDec
 
 LOGGER = logging.getLogger(__name__)
 
 
-class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
+class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
     """Encode snapshots independently and evolve a persistent latent state.
 
     ``latent_skip`` controls the transition residual: when enabled, the shared
@@ -72,6 +72,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         self.expected_num_prognostic_fields = model_settings.get("expected_num_prognostic_fields")
         self.require_bottleneck = model_settings.get("require_bottleneck", False)
         self.forecast_steps = n_step_output - 1
+        self.num_channels = model_config.model.processor.num_channels
 
         static_forcing_variables = model_config.model.get("static_forcing_variables")
         temporal_forcing_variables = model_config.model.get("temporal_forcing_variables")
@@ -104,7 +105,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
 
     def _calculate_target_dim(self, dataset_name: str) -> int:
         """Size one decoder target from one valid-time forcing snapshot."""
-        return self.num_input_channels_decoding_forcings[dataset_name] + self.node_attributes.attr_ndims[dataset_name]
+        return self.num_input_channels_forcings[dataset_name] + self.node_attributes.attr_ndims[dataset_name]
 
     def _calculate_output_dim(self, dataset_name: str) -> int:
         """Each decoder invocation emits exactly one physical snapshot."""
@@ -112,11 +113,20 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
 
     def _build_networks(self, model_config: DotDict) -> None:
         """Build the shared codec, forcing mapper, state-context mixer, and transition processor."""
+        # Snapshot decoding deliberately excludes encoded-data/prognostic skips.
+        # Preserve the original forcing, coordinate, trainable-feature ordering.
+        for decoder_config in model_config.decoders.values():
+            dataset_name = decoder_config.target_datasets[0]
+            expected_features = ["forcings", "coordinates"]
+            if self.node_attributes.num_trainable_parameters[dataset_name]:
+                expected_features.append("trainable_parameters")
+            if list(decoder_config.target_node_features) != expected_features:
+                raise ValueError(f"Predictive codec decoder target_node_features must be {expected_features}.")
         super()._build_networks(model_config)
         if isinstance(self.processor, NoOpProcessor):
             raise TypeError("Predictive autoencoding requires a real latent transition processor, not NoOpProcessor.")
 
-        forcing_encoder_config = model_config.model.get("forcing_encoder")
+        forcing_encoder_config = model_config.get("forcing_encoder")
         if forcing_encoder_config is None:
             raise ValueError("Predictive autoencoder configuration must define model.forcing_encoder.")
 
@@ -146,20 +156,21 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                     self.static_forcing_encoder,
                 )
 
-        state_context_mixer_config = model_config.model.get("state_context_mixer")
-        if state_context_mixer_config is None:
-            raise ValueError("Predictive autoencoder configuration must define model.state_context_mixer.")
-        self.state_context_mixer = instantiate(
-            state_context_mixer_config,
+        context_channels = (
+            self.num_channels
+            if not self._forcing_split_configured
+            else (self.static_forcing_context_channels or 0) + (self.temporal_forcing_context_channels or 0)
+        )
+        source_channels = {}
+        if self.use_previous_state:
+            source_channels["previous"] = self.num_channels
+        source_channels.update(current=self.num_channels, context=context_channels)
+        self.state_context_aggregator = instantiate(
+            model_config.state_context_aggregator,
             _recursive_=False,
+            input_channels=self.num_channels,
+            source_channels=source_channels,
             num_channels=self.num_channels,
-            num_state_inputs=1 + int(self.use_previous_state),
-            context_channels=(
-                self.num_channels
-                if not self._forcing_split_configured
-                else (self.static_forcing_context_channels or 0)
-                + (self.temporal_forcing_context_channels or 0)
-            ),
         )
 
     def _build_forcing_encoder(
@@ -191,7 +202,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
             _recursive_=False,
             in_channels_src=input_dim,
             in_channels_dst=self.input_dim_latent,
-            hidden_dim=context_channels,
+            num_channels=context_channels,
             edge_dim=graph_providers[dataset_name].edge_dim,
         )
 
@@ -284,7 +295,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         if dataset_shard_sizes is not None:
             node_attributes_target = shard_tensor(node_attributes_target, 0, dataset_shard_sizes, model_comm_group)
 
-        input_indices = self._decoding_forcing_input_idx[dataset_name]
+        input_indices = self._forcing_input_idx[dataset_name]
         if variables is not None:
             input_indices = self._forcing_input_indices(dataset_name, variables)
 
@@ -352,8 +363,8 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
     ) -> tuple[Tensor, ShardSizes]:
         """Encode one physical snapshot with the shared data-to-hidden mapper."""
         hidden, shard_sizes_hidden = self._initial_hidden_state(batch_size, model_comm_group)
-        dataset_latents = []
-        for dataset_name in self.dataset_names:
+        dataset_latents = {}
+        for dataset_name in self.input_datasets:
             snapshot = self._time_slice(x[dataset_name], time_index)
             x_data_latent, shard_sizes_data = self._assemble_input(
                 snapshot,
@@ -366,7 +377,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                 batch_size=batch_size,
                 model_comm_group=model_comm_group,
             )
-            _, latent = self.encoder[dataset_name](
+            _, latent = self.encoder[self.dataset2encoder[dataset_name]](
                 (x_data_latent, hidden),
                 batch_size=batch_size,
                 shard_info=BipartiteGraphShardInfo(
@@ -379,12 +390,9 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                 model_comm_group=model_comm_group,
                 keep_x_dst_sharded=True,
             )
-            dataset_latents.append(latent)
+            dataset_latents[dataset_name] = latent
 
-        latent = dataset_latents[0]
-        for dataset_latent in dataset_latents[1:]:
-            latent = latent + dataset_latent
-        return latent, shard_sizes_hidden
+        return self.latent_aggregator(hidden, dataset_latents), shard_sizes_hidden
 
     def encode_forcing_context(
         self,
@@ -510,7 +518,11 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
         model_comm_group: ProcessGroup | None = None,
     ) -> Tensor:
         """Apply one shared, forcing-conditioned hidden-grid transition."""
-        mixed = self.state_context_mixer(previous, current, target_context)
+        sources = {}
+        if self.use_previous_state:
+            sources["previous"] = previous
+        sources.update(current=current, context=target_context)
+        mixed = self.state_context_aggregator(current, sources)
         edge_attr, edge_index, edge_shard_sizes = self.processor_graph_provider.get_edges(
             batch_size=batch_size,
             model_comm_group=model_comm_group,
@@ -553,7 +565,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
                 batch_size=batch_size,
                 model_comm_group=model_comm_group,
             )
-            x_out = self.decoder[dataset_name](
+            x_out = self.decoder[self.dataset2decoder[dataset_name]](
                 (latent, target_data),
                 batch_size=batch_size,
                 shard_info=BipartiteGraphShardInfo(
@@ -683,7 +695,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelAutoEncoder):
 
     def _validate_expected_channel_counts(self) -> None:
         for dataset_name in self.dataset_names:
-            forcing_fields = self.num_input_channels_decoding_forcings[dataset_name]
+            forcing_fields = self.num_input_channels_forcings[dataset_name]
             prognostic_fields = self.num_input_channels_prognostic[dataset_name]
             if self.expected_num_forcing_fields is not None and forcing_fields != self.expected_num_forcing_fields:
                 raise ValueError(
