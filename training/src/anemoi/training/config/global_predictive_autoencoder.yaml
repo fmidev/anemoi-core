@@ -8,6 +8,7 @@ defaults:
 - /model: graphtransformer
 - /task: predictive_autoencoder
 - /training: single
+- override /training/scalers: predictive_autoencoder
 - _self_
 
 config_validation: True
@@ -277,10 +278,6 @@ training:
           _target_: anemoi.training.losses.scalers.GeneralVariableLossScaler
           weights:
             default: 1.0
-        stdev_tendency:
-          timestep: 6h
-        var_tendency:
-          timestep: 6h
         time_steps:
           _target_: anemoi.training.losses.scalers.TimeStepScaler
           # Prioritise the codec while retaining a forecastability gradient.
