@@ -15,6 +15,19 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
 
+def _portable(value):
+    """Convert local ``pathlib`` objects in Hydra configs to plain strings."""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _portable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_portable(item) for item in value)
+    return value
+
+
 def migrate_config(config: DictConfig, dataset_names: list[str]) -> DictConfig:
     """Return a new config preserving mapper widths and conditioning order."""
     result = OmegaConf.create(OmegaConf.to_container(config, resolve=False))
@@ -87,6 +100,7 @@ def migrate_checkpoint(source: Path, destination: Path) -> None:
     hparams = checkpoint["hyper_parameters"]
     datasets = list(hparams["data_indices"])
     config = migrate_config(hparams["config"], datasets)
+    config = OmegaConf.create(_portable(OmegaConf.to_container(config, resolve=False)))
     hparams["config"] = config
     hparams["metadata"]["config"] = OmegaConf.to_container(config, resolve=True)
     task = hparams["task"]
