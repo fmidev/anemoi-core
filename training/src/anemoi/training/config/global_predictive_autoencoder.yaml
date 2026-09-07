@@ -1,23 +1,33 @@
+# @package _global_
 defaults:
-- data: zarr
-- dataloader: native_grid
-- diagnostics: evaluation
-- system: example
-- graph: predictive_n320
-- model: graphtransformer
-- task: predictive_autoencoder
-- training: single
+- /data: zarr
+- /dataloader: native_grid
+- /diagnostics: evaluation
+- /system: example
+- /graph: predictive_n320_r6
+- /model: graphtransformer
+- /task: predictive_autoencoder
+- /training: single
 - _self_
 
 config_validation: True
 
-# Set these three variables before composing or launching this configuration:
-# ANEMOI_ERA5_DATASET, ANEMOI_AUTOENCODER_GRAPH, ANEMOI_AUTOENCODER_OUTPUT.
+# Stage 1 baseline: single-state N320, r6/512, joint codec and +6h forecast training.
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+# These paths are exported by batch_jobs/autoencoder/slurm_training.sh.
 system:
   input:
     dataset: ${oc.env:ANEMOI_ERA5_DATASET}
     graph: ${oc.env:ANEMOI_AUTOENCODER_GRAPH}
     warm_start: null
+  hardware:
+    # One model replica per GPU.
+    num_gpus_per_model: 1
   output:
     root: ${oc.env:ANEMOI_AUTOENCODER_OUTPUT}
 
@@ -60,6 +70,15 @@ data:
             - lsm
 
 dataloader:
+  read_group_size: 1
+  num_workers:
+    training: 1
+    validation: 1
+    test: 1
+  batch_size:
+    training: 2
+    validation: 2
+    test: 2
   dataset:
     dataset: ${system.input.dataset}
     select:
@@ -147,16 +166,41 @@ dataloader:
     - z_850
     - z_925
     - z_1000
+  training:
+    datasets:
+      data:
+        dataset_config:
+          dataset: ${dataloader.dataset}
+          frequency: ${data.frequency}
+        start: 1979-01-01
+        end: 2021-12-31
+  validation:
+    datasets:
+      data:
+        dataset_config:
+          dataset: ${dataloader.dataset}
+          frequency: ${data.frequency}
+        start: 2022-01-01
+        end: 2022-12-31
+  test:
+    datasets:
+      data:
+        dataset_config:
+          dataset: ${dataloader.dataset}
+          frequency: ${data.frequency}
+        start: 2023-01-01
+        end: 2023-12-31
 
 task:
   timestep: 6H
   forecast_steps: 1
+  use_previous_state: False
 
 graph:
   overwrite: False
 
 model:
-  num_channels: 128
+  num_channels: 512
   # Forcing context is projected independently from the persistent state latent.
   # Static context is encoded once per forward call; temporal context is encoded per target time.
   static_forcing_variables:
@@ -182,8 +226,9 @@ model:
     expected_num_prognostic_fields: 73
     require_bottleneck: True
   forcing_encoder:
+    num_channels: ${model.num_channels}
     _target_: anemoi.models.layers.mapper.GraphTransformerForwardMapper
-    trainable_size: ${model.trainable_parameters.data2hidden}
+    trainable_size: ${model.edge_trainable_parameters.data2hidden}
     sub_graph_edge_attributes: ${model.attributes.edges}
     num_chunks: 4
     mlp_hidden_ratio: 4
@@ -196,27 +241,50 @@ model:
     shard_strategy: edges
     graph_attention_backend: triton
     edge_pre_mlp: False
-  state_context_mixer:
-    _target_: anemoi.models.layers.temporal.LatentStateContextMixer
+  state_context_aggregator:
+    _target_: anemoi.models.layers.aggregator.ConcatMLPAggregator
     mlp_hidden_ratio: 2
     mlp_implementation: mlp
     n_extra_layers: 0
     final_activation: False
     layer_norm: True
     layer_kernels: ${model.layer_kernels}
-  bounding: []
+  # Preserve the codec's original conditioning order; no encoded-data skip.
+  decoders:
+    "0":
+      target_node_features: [forcings, coordinates, trainable_parameters]
+  bounding:
+    datasets:
+      data: []
 
 training:
+  load_weights_only: False
+  submodules_to_freeze: []
+  precision: bf16-mixed
+  max_epochs: null
+  max_steps: 30000
+  optimization:
+    lr: 3.90625e-6
+    lr_scheduler:
+      warmup_t: 240
   scalers:
     datasets:
       data:
+        # The codec reconstructs mean/std-normalized fields, so give every
+        # prognostic variable and pressure level equal weight. In particular,
+        # do not inherit the forecasting default of w: 0.001 here.
+        reconstruction_variable:
+          _target_: anemoi.training.losses.scalers.GeneralVariableLossScaler
+          weights:
+            default: 1.0
         stdev_tendency:
           timestep: 6h
         var_tendency:
           timestep: 6h
         time_steps:
           _target_: anemoi.training.losses.scalers.TimeStepScaler
-          weights: [1.0, 1.0]
+          # Prioritise the codec while retaining a forecastability gradient.
+          weights: [3.0, 1.0]
           norm: unit-sum
         reconstruction_time:
           _target_: anemoi.training.losses.scalers.TimeStepScaler
@@ -226,6 +294,23 @@ training:
           _target_: anemoi.training.losses.scalers.TimeStepScaler
           weights: [0.0, 1.0]
           norm: unit-sum
+  training_loss:
+    datasets:
+      data:
+        _target_: anemoi.training.losses.combined.CombinedLoss
+        scalers: []
+        ignore_nans: False
+        losses:
+        - _target_: anemoi.training.losses.MSELoss
+          # Equal weighting in normalized variable space is the codec loss.
+          scalers: [reconstruction_variable, node_weights, reconstruction_time]
+          ignore_nans: False
+        - _target_: anemoi.training.losses.MSELoss
+          # Retain the established forecast-specific variable and level weights.
+          scalers: [pressure_level, general_variable, node_weights, forecast_time]
+          ignore_nans: False
+        # Equivalent to the previous unit-sum time weights [3.0, 1.0].
+        loss_weights: [0.75, 0.25]
   validation_metrics:
     datasets:
       data:
@@ -249,10 +334,28 @@ training:
       - sp
 
 diagnostics:
+  checkpoint:
+    every_n_epochs:
+      num_models_saved: 3
+  benchmark_profiler:
+    memory:
+      enabled: False
+    time:
+      enabled: False
+    speed:
+      enabled: False
+    system:
+      enabled: False
+    model_summary:
+      enabled: False
+    snapshot:
+      enabled: False
   log:
     mlflow:
       enabled: False
       tracking_uri: null
+      # Uses Anemoi's AMD GPU monitor on LUMI; the environment must provide pyrsmi.
+      system: True
   plot:
     settings:
       precip_and_related_fields: []

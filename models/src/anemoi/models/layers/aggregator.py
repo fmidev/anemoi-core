@@ -16,7 +16,12 @@ import torch
 from torch import Tensor
 from torch import nn
 
+from anemoi.models.layers.mlp import MLP
+from anemoi.models.layers.mlp import MLPImplementation
+from anemoi.models.layers.utils import compute_mlp_hidden_dim
+from anemoi.models.layers.utils import load_layer_kernels
 from anemoi.models.layers.utils import maybe_checkpoint
+from anemoi.utils.config import DotDict
 
 
 class BaseLatentAggregator(nn.Module, ABC):
@@ -166,3 +171,50 @@ class ConcatAggregator(BaseLatentAggregator):
                 f"missing {sorted(missing_sources)}.",
             )
         return torch.cat(tuple(source_latents), dim=-1)
+
+
+class ConcatMLPAggregator(ConcatAggregator):
+    """Concatenate named sources and project them to a configured latent width."""
+
+    def __init__(
+        self,
+        *,
+        input_channels: int,
+        source_channels: Mapping[str, int],
+        num_channels: int,
+        mlp_hidden_ratio: float,
+        layer_kernels: DotDict,
+        n_extra_layers: int = 0,
+        final_activation: bool = False,
+        layer_norm: bool = True,
+        mlp_implementation: MLPImplementation = "mlp",
+        gradient_checkpointing: bool = False,
+    ) -> None:
+        super().__init__(
+            input_channels=input_channels,
+            source_channels=source_channels,
+            gradient_checkpointing=gradient_checkpointing,
+        )
+        self.num_channels = num_channels
+        self.mlp = MLP(
+            in_features=sum(source_channels.values()),
+            hidden_dim=compute_mlp_hidden_dim(num_channels, mlp_hidden_ratio),
+            out_features=num_channels,
+            n_extra_layers=n_extra_layers,
+            final_activation=final_activation,
+            layer_norm=layer_norm,
+            mlp_implementation=mlp_implementation,
+            layer_kernels=load_layer_kernels(layer_kernels),
+        )
+
+    @property
+    def hidden_dim(self) -> int:
+        return self.num_channels
+
+    def _forward(
+        self,
+        hidden_latent: Tensor,
+        source_names: Sequence[str],
+        source_latents: Sequence[Tensor],
+    ) -> Tensor:
+        return self.mlp(super()._forward(hidden_latent, source_names, source_latents))

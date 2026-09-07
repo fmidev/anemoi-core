@@ -89,12 +89,10 @@ class Model(BaseModel):
     "Keep OmegaConf containers when instantiating — model code uses attribute-style access throughout."
 
 
-class LatentStateContextMixerSchema(BaseModel):
+class ConcatMLPAggregatorSchema(BaseModel):
     """Point-wise fusion of persistent states and target-time forcing context."""
 
-    target_: Literal["anemoi.models.layers.temporal.LatentStateContextMixer"] = Field(..., alias="_target_")
-    context_channels: PositiveInt | None = Field(default=None)
-    """Number of channels in the concatenated forcing/observation context."""
+    target_: Literal["anemoi.models.layers.aggregator.ConcatMLPAggregator"] = Field(..., alias="_target_")
     mlp_hidden_ratio: PositiveFloat = Field(default=2.0)
     n_extra_layers: NonNegativeInt = Field(default=0)
     final_activation: bool = Field(default=False)
@@ -270,7 +268,7 @@ class BaseModelSchema(PydanticBaseModel):
         discriminator="target_",
     )
     "Optional forcing-only encoder used by predictive latent models."
-    state_context_mixer: LatentStateContextMixerSchema | None = Field(default=None)
+    state_context_aggregator: ConcatMLPAggregatorSchema | None = Field(default=None)
     "Optional point-wise state-context mixer configuration used by predictive latent models."
     residual: DatasetDict[ResidualConnectionSchema]
     "Residual connection schema."

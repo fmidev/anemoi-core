@@ -18,6 +18,7 @@ from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.distributed.shapes import GraphShardInfo
 from anemoi.models.models import AnemoiModelPredictiveAutoEncoder
 from anemoi.models.schemas.models import BaseModelSchema
+from anemoi.models.utils.predictive_autoencoder_migration import migrate_config
 
 
 def _component(target: str) -> dict:
@@ -30,7 +31,7 @@ def _component(target: str) -> dict:
 
 
 def _model_config(*, latent_skip: bool = True, require_bottleneck: bool = True) -> DictConfig:
-    return OmegaConf.create(
+    legacy = OmegaConf.create(
         {
             "model": {
                 "num_channels": 2,
@@ -73,6 +74,8 @@ def _model_config(*, latent_skip: bool = True, require_bottleneck: bool = True) 
             },
         },
     )
+
+    return migrate_config(legacy, ["data"])
 
 
 def _data_indices() -> dict[str, IndexCollection]:
@@ -290,7 +293,7 @@ def test_shared_encoder_runs_only_for_the_two_history_snapshots() -> None:
         nonlocal forcing_encoder_calls
         forcing_encoder_calls += 1
 
-    encoder_hook = model.encoder["data"].register_forward_hook(count_encoder)
+    encoder_hook = model.encoder["0"].register_forward_hook(count_encoder)
     forcing_hook = model.forcing_encoder["data"].register_forward_hook(count_forcing_encoder)
     try:
         model(_input(2))
@@ -310,7 +313,7 @@ def test_current_analysis_only_encodes_one_state() -> None:
         nonlocal encoder_calls
         encoder_calls += 1
 
-    hook = model.encoder["data"].register_forward_hook(count_encoder)
+    hook = model.encoder["0"].register_forward_hook(count_encoder)
     try:
         model(_input(2, use_previous_state=False))
     finally:
@@ -360,7 +363,7 @@ def test_reconstruction_and_forecast_losses_reach_expected_modules() -> None:
     output[:, 1:].square().mean().backward()
     assert _nonzero_gradient(model.encoder.parameters())
     assert _nonzero_gradient(model.forcing_encoder.parameters())
-    assert _nonzero_gradient(model.state_context_mixer.parameters())
+    assert _nonzero_gradient(model.state_context_aggregator.parameters())
     assert _nonzero_gradient(model.processor.parameters())
     assert _nonzero_gradient(model.decoder.parameters())
 
@@ -372,7 +375,7 @@ def test_latent_skip_adds_the_current_state_to_transition_delta() -> None:
     current, _ = model.encode_snapshot(inputs, 1, batch_size=2)
     context, _ = model.encode_forcing_context(inputs, 2, batch_size=2)
 
-    mixed = model.state_context_mixer(previous, current, context)
+    mixed = model.state_context_aggregator(current, {"previous": previous, "current": current, "context": context})
     expected_delta = model.processor(
         x=mixed,
         batch_size=2,
@@ -416,12 +419,13 @@ def test_model_schema_accepts_predictive_components() -> None:
 
     assert validated.model.target_ == "anemoi.models.models.AnemoiModelPredictiveAutoEncoder"
     assert validated.forcing_encoder is not None
-    assert validated.state_context_mixer is not None
+    assert validated.state_context_aggregator is not None
 
 
 def test_noop_transition_processor_is_rejected() -> None:
     config = _model_config()
     config.model.processor = _component("anemoi.models.layers.processor.NoOpProcessor")
+    config.model.processor.num_channels = 2
 
     with pytest.raises(TypeError, match="real latent transition processor"):
         AnemoiModelPredictiveAutoEncoder(
