@@ -1,4 +1,9 @@
 _target_: anemoi.training.tasks.PredictiveAutoencoder
 timestep: 6H
 forecast_steps: 1
+# Null decodes every step. Set, for example, [0, 1, 4] to decode only the
+# reconstruction, +6h, and +24h while rolling the latent state through every
+# intermediate step. The configured time-step loss scaler weights must have
+# one entry per loss step, in the same order.
+loss_steps: null
 use_previous_state: True

@@ -79,6 +79,8 @@ class PredictiveAutoencoderTaskSchema(BaseModel):
     "Spacing between the current state and forecast valid times."
     forecast_steps: NonNegativeInt = Field(default=1, example=1)
     "Number of future snapshots rolled out inside one model call; zero reconstructs only."
+    loss_steps: list[NonNegativeInt] | None = Field(default=None, example=[0, 1, 4])
+    "Rollout step indices decoded and included in the loss. Null decodes every step."
     use_previous_state: bool = Field(default=True, example=False)
     "Whether the state preceding the current analysis is supplied to the latent transition."
 

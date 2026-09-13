@@ -53,6 +53,26 @@ def test_current_analysis_only_offsets() -> None:
     assert task.num_output_timesteps == 3
 
 
+def test_sparse_loss_steps_keep_full_rollout_inputs() -> None:
+    task = PredictiveAutoencoder(timestep="6H", forecast_steps=4, loss_steps=[0, 1, 4])
+
+    assert task.get_input_offsets() == [
+        datetime.timedelta(hours=-6),
+        datetime.timedelta(0),
+        datetime.timedelta(hours=6),
+        datetime.timedelta(hours=12),
+        datetime.timedelta(hours=18),
+        datetime.timedelta(hours=24),
+    ]
+    assert task.get_output_offsets() == [
+        datetime.timedelta(0),
+        datetime.timedelta(hours=6),
+        datetime.timedelta(hours=24),
+    ]
+    assert task.num_input_timesteps == 6
+    assert task.num_output_timesteps == 3
+
+
 def test_future_prognostics_are_masked_but_forcings_are_retained() -> None:
     task = PredictiveAutoencoder(timestep="6H", forecast_steps=2)
     indices = _indices()
@@ -116,6 +136,12 @@ def test_metadata_records_current_analysis_only_layout() -> None:
 def test_forecast_steps_must_be_a_non_negative_integer(forecast_steps: object) -> None:
     with pytest.raises(ValueError, match="non-negative integer"):
         PredictiveAutoencoder(forecast_steps=forecast_steps)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("loss_steps", [[], [1, 0], [0, 0], [0, 2], [True]])
+def test_loss_steps_must_be_sorted_unique_rollout_indices(loss_steps: list[object]) -> None:
+    with pytest.raises(ValueError, match="loss_steps"):
+        PredictiveAutoencoder(forecast_steps=1, loss_steps=loss_steps)  # type: ignore[arg-type]
 
 
 def test_reconstruction_only_current_state() -> None:

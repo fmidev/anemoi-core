@@ -37,6 +37,7 @@ class PredictiveAutoencoder(BaseSingleStepTask):
         timestep: str = "6H",
         forecast_steps: int = 1,
         use_previous_state: bool = True,
+        loss_steps: list[int] | None = None,
         **kwargs,
     ) -> None:
         if not isinstance(forecast_steps, int) or isinstance(forecast_steps, bool) or forecast_steps < 0:
@@ -44,11 +45,26 @@ class PredictiveAutoencoder(BaseSingleStepTask):
             raise ValueError(message)
         if not isinstance(use_previous_state, bool):
             raise ValueError(f"use_previous_state must be a boolean, got {use_previous_state!r}.")
+        if loss_steps is None:
+            loss_steps = list(range(forecast_steps + 1))
+        if not isinstance(loss_steps, list) or not loss_steps:
+            message = "loss_steps must be a non-empty list of rollout step indices."
+            raise ValueError(message)
+        if any(not isinstance(step, int) or isinstance(step, bool) for step in loss_steps):
+            message = "loss_steps must contain integers."
+            raise ValueError(message)
+        if any(step < 0 or step > forecast_steps for step in loss_steps):
+            message = f"loss_steps must be between 0 and {forecast_steps}, got {loss_steps}."
+            raise ValueError(message)
+        if loss_steps != sorted(set(loss_steps)):
+            message = "loss_steps must be strictly increasing without duplicates."
+            raise ValueError(message)
 
         self.timestep = frequency_to_timedelta(timestep)
         self.forecast_steps = forecast_steps
         self.use_previous_state = use_previous_state
         self.current_time_index = int(use_previous_state)
+        self.loss_steps = loss_steps
 
         if kwargs:
             LOGGER.warning(
@@ -61,7 +77,7 @@ class PredictiveAutoencoder(BaseSingleStepTask):
         initial_offsets = [-self.timestep, self.timestep * 0] if use_previous_state else [self.timestep * 0]
         super().__init__(
             input_offsets=[*initial_offsets, *future_offsets],
-            output_offsets=[self.timestep * 0, *future_offsets],
+            output_offsets=[step * self.timestep for step in loss_steps],
         )
         self._plot_adapter = PredictiveAutoencoderPlotAdapter(self)
 
