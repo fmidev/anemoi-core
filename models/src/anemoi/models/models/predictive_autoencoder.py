@@ -54,24 +54,37 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
         graph_data: HeteroData,
     ) -> None:
         if n_step_output < 1:
-            raise ValueError("Predictive autoencoding requires at least the reconstruction output.")
-        if n_step_input == n_step_output:
-            self.use_previous_state = False
-        elif n_step_input == n_step_output + 1:
-            self.use_previous_state = True
+            raise ValueError("Predictive autoencoding requires at least one decoded loss step.")
+        task_config = model_config.get("task", {})
+        configured_loss_steps = task_config.get("loss_steps")
+        if configured_loss_steps is None:
+            # Preserve the existing dense behavior when sparse outputs are not
+            # configured: output count still defines the rollout horizon.
+            self.use_previous_state = n_step_input == n_step_output + 1
+            if n_step_input not in (n_step_output, n_step_output + 1):
+                raise ValueError(
+                    "Predictive autoencoder input must contain the current state, optional preceding state, and one "
+                    "forcing snapshot per forecast step; expected n_step_input to equal n_step_output or "
+                    f"n_step_output + 1, got n_step_input={n_step_input}, n_step_output={n_step_output}."
+                )
+            self.forecast_steps = n_step_output - 1
+            self.decode_steps = tuple(range(n_step_output))
         else:
-            raise ValueError(
-                "Predictive autoencoder input must contain the current state, optional preceding state, and one "
-                "forcing snapshot per forecast step; expected n_step_input to equal n_step_output or "
-                f"n_step_output + 1, got n_step_input={n_step_input}, n_step_output={n_step_output}."
-            )
+            self.use_previous_state = bool(task_config.get("use_previous_state", True))
+            self.forecast_steps = n_step_input - int(self.use_previous_state) - 1
+            self.decode_steps = tuple(configured_loss_steps)
+            if self.forecast_steps < 0 or n_step_output != len(self.decode_steps):
+                raise ValueError("Sparse predictive-autoencoder outputs must match configured task.loss_steps.")
+            if any(step < 0 or step > self.forecast_steps for step in self.decode_steps):
+                raise ValueError(
+                    f"task.loss_steps must be between 0 and {self.forecast_steps}, got {list(self.decode_steps)}."
+                )
         self.current_time_index = int(self.use_previous_state)
 
         model_settings = model_config.model.model
         self.expected_num_forcing_fields = model_settings.get("expected_num_forcing_fields")
         self.expected_num_prognostic_fields = model_settings.get("expected_num_prognostic_fields")
         self.require_bottleneck = model_settings.get("require_bottleneck", False)
-        self.forecast_steps = n_step_output - 1
         self.num_channels = model_config.model.processor.num_channels
 
         static_forcing_variables = model_config.model.get("static_forcing_variables")
@@ -595,7 +608,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
         grid_shard_sizes: DatasetShardSizes | None = None,
         **kwargs,
     ) -> dict[str, Tensor]:
-        """Return reconstruction first, followed by increasing free forecast times."""
+        """Return decoder outputs at configured rollout loss steps."""
         del kwargs
         dataset_names = list(x.keys())
         if set(dataset_names) != set(self.dataset_names):
@@ -633,22 +646,25 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
             grid_shard_sizes=grid_shard_sizes,
         )
 
-        reconstruction = self.decode_snapshot(
-            current,
-            x,
-            self.current_time_index,
-            batch_size=batch_size,
-            ensemble_size=ensemble_size,
-            shard_sizes_hidden=shard_sizes_hidden,
-            in_out_sharded=in_out_sharded,
-            model_comm_group=model_comm_group,
-            grid_shard_sizes=grid_shard_sizes,
-        )
+        outputs = {dataset_name: [] for dataset_name in dataset_names}
+        if 0 in self.decode_steps:
+            reconstruction = self.decode_snapshot(
+                current,
+                x,
+                self.current_time_index,
+                batch_size=batch_size,
+                ensemble_size=ensemble_size,
+                shard_sizes_hidden=shard_sizes_hidden,
+                in_out_sharded=in_out_sharded,
+                model_comm_group=model_comm_group,
+                grid_shard_sizes=grid_shard_sizes,
+            )
+            for dataset_name in dataset_names:
+                outputs[dataset_name].append(reconstruction[dataset_name])
         # Keep the transition weights in checkpoints, but do not execute any
         # forecast-only networks during reconstruction-only codec training.
         if self.forecast_steps == 0:
-            return reconstruction
-        outputs = {dataset_name: [reconstruction[dataset_name]] for dataset_name in dataset_names}
+            return {dataset_name: torch.cat(dataset_outputs, dim=1) for dataset_name, dataset_outputs in outputs.items()}
 
         static_context, _ = self.encode_static_forcing_context(
             x,
@@ -675,19 +691,20 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
                 shard_sizes_hidden=shard_sizes_hidden,
                 model_comm_group=model_comm_group,
             )
-            forecast = self.decode_snapshot(
-                predicted,
-                x,
-                target_time_index,
-                batch_size=batch_size,
-                ensemble_size=ensemble_size,
-                shard_sizes_hidden=shard_sizes_hidden,
-                in_out_sharded=in_out_sharded,
-                model_comm_group=model_comm_group,
-                grid_shard_sizes=grid_shard_sizes,
-            )
-            for dataset_name in dataset_names:
-                outputs[dataset_name].append(forecast[dataset_name])
+            if forecast_step + 1 in self.decode_steps:
+                forecast = self.decode_snapshot(
+                    predicted,
+                    x,
+                    target_time_index,
+                    batch_size=batch_size,
+                    ensemble_size=ensemble_size,
+                    shard_sizes_hidden=shard_sizes_hidden,
+                    in_out_sharded=in_out_sharded,
+                    model_comm_group=model_comm_group,
+                    grid_shard_sizes=grid_shard_sizes,
+                )
+                for dataset_name in dataset_names:
+                    outputs[dataset_name].append(forecast[dataset_name])
             previous = current if self.use_previous_state else None
             current = predicted
 

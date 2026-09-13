@@ -107,14 +107,18 @@ def _make_model(
     latent_skip: bool = True,
     require_bottleneck: bool = True,
     use_previous_state: bool = True,
+    loss_steps: list[int] | None = None,
 ) -> AnemoiModelPredictiveAutoEncoder:
     torch.manual_seed(7)
+    model_config = _model_config(latent_skip=latent_skip, require_bottleneck=require_bottleneck)
+    if loss_steps is not None:
+        model_config.task = DictConfig({"loss_steps": loss_steps, "use_previous_state": use_previous_state})
     return AnemoiModelPredictiveAutoEncoder(
-        model_config=_model_config(latent_skip=latent_skip, require_bottleneck=require_bottleneck),
+        model_config=model_config,
         data_indices=_data_indices(),
         statistics={"data": {}},
         n_step_input=forecast_steps + 1 + int(use_previous_state),
-        n_step_output=forecast_steps + 1,
+        n_step_output=len(loss_steps) if loss_steps is not None else forecast_steps + 1,
         graph_data=_graph(),
     )
 
@@ -143,6 +147,37 @@ def test_output_shape_and_time_order(forecast_steps: int, use_previous_state: bo
     output = model(inputs)["data"]
 
     assert output.shape == (2, forecast_steps + 1, 1, 4, 3)
+
+
+@pytest.mark.parametrize(
+    ("loss_steps", "expected_decoded_time_indices"),
+    [([0, 3], [1, 4]), ([1, 3], [2, 4])],
+)
+def test_sparse_loss_steps_skip_intermediate_decoder_calls(
+    monkeypatch, loss_steps, expected_decoded_time_indices
+) -> None:
+    model = _make_model(forecast_steps=3, loss_steps=loss_steps)
+    decoded_time_indices = []
+    transition_calls = 0
+    decode_snapshot = model.decode_snapshot
+    transition_latent = model.transition_latent
+
+    def count_decode(*args, **kwargs):
+        decoded_time_indices.append(args[2])
+        return decode_snapshot(*args, **kwargs)
+
+    def count_transition(*args, **kwargs):
+        nonlocal transition_calls
+        transition_calls += 1
+        return transition_latent(*args, **kwargs)
+
+    monkeypatch.setattr(model, "decode_snapshot", count_decode)
+    monkeypatch.setattr(model, "transition_latent", count_transition)
+    output = model(_input(3))["data"]
+
+    assert output.shape == (2, 2, 1, 4, 3)
+    assert decoded_time_indices == expected_decoded_time_indices
+    assert transition_calls == 3
 
 
 @pytest.mark.parametrize("use_previous_state", [True, False])
