@@ -12,6 +12,7 @@
 import logging
 
 import torch
+from omegaconf import ListConfig
 
 from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.training.diagnostics.callbacks.plot_adapter import PredictiveAutoencoderPlotAdapter
@@ -47,7 +48,7 @@ class PredictiveAutoencoder(BaseSingleStepTask):
             raise ValueError(f"use_previous_state must be a boolean, got {use_previous_state!r}.")
         if loss_steps is None:
             loss_steps = list(range(forecast_steps + 1))
-        if not isinstance(loss_steps, list) or not loss_steps:
+        if not isinstance(loss_steps, (list, ListConfig)) or not loss_steps:
             message = "loss_steps must be a non-empty list of rollout step indices."
             raise ValueError(message)
         if any(not isinstance(step, int) or isinstance(step, bool) for step in loss_steps):
@@ -59,6 +60,7 @@ class PredictiveAutoencoder(BaseSingleStepTask):
         if loss_steps != sorted(set(loss_steps)):
             message = "loss_steps must be strictly increasing without duplicates."
             raise ValueError(message)
+        loss_steps = list(loss_steps)
 
         self.timestep = frequency_to_timedelta(timestep)
         self.forecast_steps = forecast_steps

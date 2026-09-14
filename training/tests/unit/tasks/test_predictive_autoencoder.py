@@ -12,6 +12,7 @@ import datetime
 import pytest
 import torch
 from omegaconf import DictConfig
+from omegaconf import ListConfig
 
 from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.training.tasks import PredictiveAutoencoder
@@ -71,6 +72,13 @@ def test_sparse_loss_steps_keep_full_rollout_inputs() -> None:
     ]
     assert task.num_input_timesteps == 6
     assert task.num_output_timesteps == 3
+
+
+def test_sparse_loss_steps_accept_hydra_list_config() -> None:
+    task = PredictiveAutoencoder(timestep="6H", forecast_steps=4, loss_steps=ListConfig([1, 4]))
+
+    assert task.loss_steps == [1, 4]
+    assert task.get_output_offsets() == [datetime.timedelta(hours=6), datetime.timedelta(hours=24)]
 
 
 def test_future_prognostics_are_masked_but_forcings_are_retained() -> None:
