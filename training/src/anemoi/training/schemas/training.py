@@ -450,7 +450,7 @@ class TimeAggregateLossWrapperSchema(BaseModel):
     target_: Literal["anemoi.training.losses.aggregate.TimeAggregateLossWrapper"] = Field(..., alias="_target_")
     time_aggregation_types: list[Literal["diff", "mean", "min", "max"]] = Field(min_length=1)
     "Time aggregation operations to apply over the time dimension before computing the loss."
-    loss_fn: BaseLossSchema | CRPSSchema
+    loss_fn: BaseLossSchema | CRPSSchema | MixtureCrossEntropyLossSchema
     "Inner loss function applied to each time-aggregated output."
     scalers: list[str] | None = None
     "Scalers to apply to the wrapped loss (delegated to inner loss_fn)."
@@ -817,8 +817,8 @@ class BaseTrainingSchema(BaseModel):
     "Config for gradient clipping."
     strategy: StrategySchemas
     "Strategy to use."
-    training_loss: DatasetDict[LossSchemas]
-    "Training loss configuration."
+    training_loss: DatasetDict[LossSchemas | None]
+    "Training loss configuration. A dataset entry set to null is excluded from loss and metric computation."
     weight_averaging: WeightAveragingSchema | None = Field(default=None)
     "Config for weight averaging (SWA or EMA). Set to null to disable."
     loss_gradient_scaling: bool = False

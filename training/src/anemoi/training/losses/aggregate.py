@@ -160,6 +160,9 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
                 **shared_kwargs,
             )
             if time_weights is not None:
-                step_loss = step_loss * time_weights[step]
+                # A time scaler may be a single broadcastable weight rather than one
+                # entry per step (UniformTimeStepScaler emits 1/T so that it also fits
+                # outputs with a subsampled time dimension); apply it to every step.
+                step_loss = step_loss * (time_weights.reshape(-1)[0] if time_weights.numel() == 1 else time_weights[step])
             loss = loss + step_loss
         return loss

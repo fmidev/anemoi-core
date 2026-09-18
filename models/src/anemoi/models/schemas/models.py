@@ -41,6 +41,7 @@ from .encoder import GNNEncoderSchema  # noqa: TC001
 from .encoder import GraphTransformerEncoderSchema  # noqa: TC001
 from .encoder import PointWiseForwardMapperSchema  # noqa: TC001
 from .encoder import TransformerEncoderSchema  # noqa: TC001
+from .common_components import TransformerModelComponent  # noqa: TC001
 from .processor import GNNProcessorSchema  # noqa: TC001
 from .processor import GraphTransformerProcessorSchema  # noqa: TC001
 from .processor import NoOpProcessorSchema  # noqa: TC001
@@ -157,6 +158,18 @@ class Boolean1DSchema(BaseModel):
 OutputMaskSchemas = Union[NoOutputMaskSchema, Boolean1DSchema]
 
 
+class TargetForcingSchema(BaseModel):
+    """Fraction-conditioned decoding of a dataset (temporal interpolation head)."""
+
+    data: list[str] = Field(default_factory=list)
+    time_fraction: bool = Field(default=True)
+    linear_residual: bool = Field(default=False)
+    anchor: Literal["linear", "backward", "forward", "none"] | dict[str, Literal["linear", "backward", "forward", "none"]] | None = Field(
+        default=None
+    )
+    time_noise_channels: NonNegativeInt = Field(default=0)
+
+
 class EncodersSchema(BaseModel):
     """Encoder schema"""
 
@@ -196,6 +209,10 @@ class DecodersSchema(BaseModel):
 
 
 class BaseModelSchema(PydanticBaseModel):
+    num_channels: NonNegativeInt = Field(default=0, example=512)
+    "Feature tensor size in the hidden space."
+    target_forcing: dict[str, TargetForcingSchema] = Field(default_factory=dict)
+    "Fraction-conditioned decoding settings, keyed by dataset name. Defaults to {} (disabled)."
     keep_batch_sharded: bool = Field(default=True)
     "Keep the input batch and the output of the model sharded"
     sparse_projector: SparseProjectorSchema = Field(default_factory=SparseProjectorSchema)

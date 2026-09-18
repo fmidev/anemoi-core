@@ -69,8 +69,14 @@ class UniformTimeStepScaler(TimeStepScaler):
             task is not None
         ), "Task must be provided to TimeStepScaler to determine the number of output steps for scaling."
         del kwargs
-        weights = [1.0] * task.num_output_timesteps
-        super().__init__(weights=weights, norm="unit-sum")
+        # num_loss_timesteps (defaulting to num_output_timesteps) covers tasks whose
+        # model produces more output times per step than num_output_timesteps
+        # (e.g. fraction-conditioned interpolation heads).
+        # A single broadcastable weight of 1/T is equivalent to T unit-sum weights
+        # for a T-step output, and additionally tolerates outputs with fewer time
+        # steps (stochastic fraction subsampling) without a shape mismatch.
+        num_timesteps = getattr(task, "num_loss_timesteps", task.num_output_timesteps)
+        super().__init__(weights=[1.0 / num_timesteps], norm=None)
 
 
 class LeadTimeDecayScaler(TimeStepScaler):
