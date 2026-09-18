@@ -17,11 +17,10 @@ def compute_relative_date_indices(
     data_readers: dict,
     **kwargs,
 ) -> dict[str, list[int]]:
-    """Compute relative date indices for each dataset based on task offsets."""
-    offsets = task.get_offsets(**kwargs)
-
+    """Compute relative date indices for each dataset based on the task's per-dataset offsets."""
     relative_date_indices = {}
     for name, dr in data_readers.items():
+        offsets = task.get_offsets(dataset_name=name, **kwargs)
         if any(o % dr.frequency for o in offsets):
             msg = (
                 f"The frequency of `{name}` ({frequency_to_string(dr.frequency)}) is not compatible "

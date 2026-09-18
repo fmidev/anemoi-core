@@ -69,6 +69,17 @@ class BaseTask(ABC):
         return len(self._output_offsets)
 
     @property
+    def num_loss_timesteps(self) -> int:
+        """Number of output time steps entering the loss per task step.
+
+        Defaults to ``num_output_timesteps``. Tasks whose model produces more
+        output times per step than ``num_output_timesteps`` (e.g. a
+        fraction-conditioned interpolator decoding one time per invocation)
+        override this so time-dimension loss scalers are sized correctly.
+        """
+        return self.num_output_timesteps
+
+    @property
     def num_steps(self) -> int:
         """Number of training steps (rollout length)."""
         return len(self.steps("training"))
@@ -77,43 +88,56 @@ class BaseTask(ABC):
         """Get the metric name for the current step (if any)."""
         return ""
 
-    def get_input_offsets(self, **_kwargs) -> list[datetime.timedelta]:
-        """Get the list of input time offsets."""
+    def get_input_offsets(self, dataset_name: str | None = None, **_kwargs) -> list[datetime.timedelta]:  # noqa: ARG002
+        """Get the list of input time offsets, optionally specific to ``dataset_name``."""
         return self._input_offsets
 
-    def get_output_offsets(self, **_kwargs) -> list[datetime.timedelta]:
-        """Return the output offsets for a given step.
+    def get_output_offsets(self, dataset_name: str | None = None, **_kwargs) -> list[datetime.timedelta]:  # noqa: ARG002
+        """Return the output offsets for a given step, optionally specific to ``dataset_name``.
 
         The default implementation returns ``self._output_offsets``.
-        Subclasses may override this to shift outputs per rollout step.
+        Subclasses may override this to shift outputs per rollout step or to
+        return different (possibly empty) offsets per dataset.
         """
         return self._output_offsets
 
-    def get_offsets(self, **_kwargs) -> list[datetime.timedelta]:
+    def get_offsets(self, dataset_name: str | None = None, **_kwargs) -> list[datetime.timedelta]:  # noqa: ARG002
         """Get the list of offsets for a given mode (e.g. "training", "validation", "test").
 
         By default, this returns ``self._offsets``, but can be overridden by subclasses to return
-        different offsets per mode for example (e.g different rollout in training vs validation).
+        different offsets per mode (e.g. different rollout in training vs validation) or per
+        dataset (``dataset_name``, e.g. intermediate target times only for some datasets).
         """
         return self._offsets
 
-    def _offsets_to_batch_indices(self, offsets: list[datetime.timedelta], **kwargs) -> list[int]:
-        """Map a list of offsets to their positions in ``self._offsets``."""
-        full = self.get_offsets(**kwargs)
+    def _offsets_to_batch_indices(
+        self,
+        offsets: list[datetime.timedelta],
+        dataset_name: str | None = None,
+        **kwargs,
+    ) -> list[int]:
+        """Map a list of offsets to their positions in the dataset's batch offsets."""
+        full = self.get_offsets(dataset_name=dataset_name, **kwargs)
         return [full.index(o) for o in offsets]
 
-    def get_batch_input_indices(self, **kwargs) -> list[int]:
+    def get_batch_input_indices(self, dataset_name: str | None = None, **kwargs) -> list[int]:
         """Positions of the input offsets within the full batch ``_offsets``."""
-        return self._offsets_to_batch_indices(self.get_input_offsets(**kwargs))
+        return self._offsets_to_batch_indices(
+            self.get_input_offsets(dataset_name=dataset_name, **kwargs),
+            dataset_name=dataset_name,
+        )
 
-    def get_batch_output_indices(self, **kwargs) -> list[int]:
+    def get_batch_output_indices(self, dataset_name: str | None = None, **kwargs) -> list[int]:
         """Positions of the output offsets within the full batch ``_offsets``.
 
-        Parameters are forwarded to ``get_output_offset`` so that
+        Parameters are forwarded to ``get_output_offsets`` so that
         subclasses can parametrise the output selection (e.g. per
         rollout step).
         """
-        return self._offsets_to_batch_indices(self.get_output_offsets(**kwargs))
+        return self._offsets_to_batch_indices(
+            self.get_output_offsets(dataset_name=dataset_name, **kwargs),
+            dataset_name=dataset_name,
+        )
 
     def _assert_time_indices_in_batch(
         self,
@@ -157,11 +181,9 @@ class BaseTask(ABC):
             Input tensors per dataset with shape
             ``(bs, num_inputs, grid, nvar)``.
         """
-        time_indices = self.get_batch_input_indices()
-        time_indices = normalize_time_indices(time_indices)
-
         x = {}
         for dataset_name, dataset_batch in batch.items():
+            time_indices = normalize_time_indices(self.get_batch_input_indices(dataset_name=dataset_name))
             dataset_batch = dataset_batch[:, time_indices]
             x[dataset_name] = dataset_batch[..., data_indices[dataset_name].data.input.full]
             LOGGER.debug("SHAPE: x[%s].shape = %s", dataset_name, list(x[dataset_name].shape))
@@ -183,17 +205,35 @@ class BaseTask(ABC):
         dict[str, torch.Tensor]
             Target tensors per dataset with shape
             ``(bs, num_outputs, ensemble, grid, full_nvar)`` in DATA_FULL
-            variable space (all variables including forcings).
+            variable space (all variables including forcings). Datasets with
+            no output offsets (input-only datasets) are omitted.
         """
-        time_indices = self.get_batch_output_indices(**kwargs)
-        self._assert_time_indices_in_batch(time_indices, batch, **kwargs)
-        time_indices = normalize_time_indices(time_indices)
-
         y = {}
         for dataset_name, dataset_batch in batch.items():
+            if not self.get_output_offsets(dataset_name=dataset_name, **kwargs):
+                continue
+            time_indices = self.get_batch_output_indices(dataset_name=dataset_name, **kwargs)
+            self._assert_time_indices_in_batch(time_indices, {dataset_name: dataset_batch}, **kwargs)
+            time_indices = normalize_time_indices(time_indices)
             y[dataset_name] = dataset_batch[:, time_indices]
             LOGGER.debug("SHAPE: y[%s].shape = %s", dataset_name, list(y[dataset_name].shape))
         return y
+
+    def get_forward_kwargs(
+        self,
+        batch: dict[str, torch.Tensor],
+        data_indices: dict[str, IndexCollection],
+        **_step_kwargs,
+    ) -> dict:
+        """Extra ``model.forward`` kwargs derived from the batch (default: none).
+
+        Called by the training methods once per task step, after the batch has
+        been normalized and (possibly) grid-sharded. Tasks that condition the
+        model on batch-derived quantities (e.g. target-time forcings) override
+        this hook.
+        """
+        del batch, data_indices
+        return {}
 
     def log_extra(self, *_args, **_kwargs) -> None:  # noqa: B027
         """Hook to log any task-specific information."""
@@ -221,19 +261,19 @@ class BaseTask(ABC):
         """Fill the metadata dictionary with task-specific information."""
         md_dict["task"] = self.name
 
-        input_relative_date_indices = self.get_batch_input_indices()
-        output_relative_date_indices = self.get_batch_output_indices()
         timestep = self._get_timestep_for_metadata()
-        relative_date_indices = sorted(input_relative_date_indices + output_relative_date_indices)
-        timesteps = {
-            "relative_date_indices_training": relative_date_indices,  # backwards compatibility with inference
-            "input_relative_date_indices": input_relative_date_indices,  # backwards compatibility with inference
-            "output_relative_date_indices": output_relative_date_indices,  # backwards compatibility with inference
-            "timestep": timestep,  # backwards compatibility with inference
-        }
 
         dataset_names = md_dict["metadata_inference"]["dataset_names"]
         for dataset_name in dataset_names:
+            input_relative_date_indices = self.get_batch_input_indices(dataset_name=dataset_name)
+            output_relative_date_indices = self.get_batch_output_indices(dataset_name=dataset_name)
+            relative_date_indices = sorted(input_relative_date_indices + output_relative_date_indices)
+            timesteps = {
+                "relative_date_indices_training": relative_date_indices,  # backwards compatibility with inference
+                "input_relative_date_indices": input_relative_date_indices,  # backwards compatibility with inference
+                "output_relative_date_indices": output_relative_date_indices,  # backwards compatibility with inference
+                "timestep": timestep,  # backwards compatibility with inference
+            }
             md_dict["metadata_inference"][dataset_name]["timesteps"] = timesteps
 
 

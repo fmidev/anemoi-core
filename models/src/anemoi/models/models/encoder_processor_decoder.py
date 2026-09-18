@@ -303,6 +303,13 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         dict[str, Tensor]
             Output of the model, with the same shape as the input (sharded if input is sharded)
         """
+        if getattr(self, "target_forcing", {}):
+            msg = (
+                "target_forcing (fraction-conditioned decoding) is only implemented for "
+                "AnemoiEnsModelEncProcDec."
+            )
+            raise NotImplementedError(msg)
+
         dataset_names = list(x.keys())
 
         # Extract and validate batch & ensemble sizes across datasets
@@ -453,3 +460,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
                 "grid": None,  # grid size is dynamic
             }
             md_dict["metadata_inference"][dataset]["shapes"] = shapes
+            # Conditioning contract for fraction-conditioned (interpolation) heads:
+            # inference must supply target fractions (and these forcings at the
+            # target times) for this dataset via forward(target_times=...).
+            md_dict["metadata_inference"][dataset]["target_forcing"] = self.target_forcing.get(dataset)

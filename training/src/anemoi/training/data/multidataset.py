@@ -341,9 +341,10 @@ class MultiDataset(IterableDataset):
         )
 
     def get_sample(self, index: int) -> dict[str, torch.Tensor]:
-        sequence, position = (int(v) for v in self.anchors[index])
+        sequence, anchor_key = (int(v) for v in self.anchors[index])
         x = {}
         for name, dataset in self.data_readers.items():
+            position = dataset.anchor_key_to_position(anchor_key)
             time_steps = offset_time_indices(position, self.relative_date_indices[name])
             # self.shard_sizes is lazily initalised to None
             # This if statement guards against the case where shard_sizes is not set

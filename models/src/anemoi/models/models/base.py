@@ -16,6 +16,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from omegaconf import ListConfig
+from omegaconf import OmegaConf
 from torch import Tensor
 from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
@@ -72,6 +73,21 @@ class BaseGraphModel(nn.Module):
         self.dataset_names = list(data_indices.keys())
         self._graph_name_hidden = model_config.model.model.hidden_nodes_name
 
+        # TODO: schema should already provide a default for this?
+        if "encoder" in model_config.model and "skip" in model_config.model.encoder:
+            self.encoders_to_skip = model_config.model.encoder.skip
+        else:
+            self.encoders_to_skip = []
+
+        if "residual" in model_config.model and "skip" in model_config.model.residual:
+            self.residuals_to_skip = model_config.model.residual.skip
+        else:
+            self.residuals_to_skip = []
+
+        # Fraction-conditioned decoding (temporal interpolation heads), keyed by dataset name.
+        self.target_forcing = self._parse_target_forcing(model_config)
+
+        self.num_channels = model_config.model.get("num_channels", None)
         self.latent_skip = model_config.model.model.latent_skip
 
         self.node_attributes = NamedNodesAttributes(
@@ -177,6 +193,21 @@ class BaseGraphModel(nn.Module):
             source_channels=latent_aggregator_channels,
         )
 
+    @staticmethod
+    def _parse_target_forcing(model_config: DictConfig) -> dict:
+        """Parse ``model.target_forcing`` into plain python containers.
+
+        The mapping is embedded in the checkpoint inference metadata
+        (``fill_metadata``), which must be JSON serializable, so OmegaConf
+        nodes are deep-converted rather than kept as DictConfig/ListConfig.
+        """
+        if "target_forcing" not in model_config.model or not model_config.model.target_forcing:
+            return {}
+        config = model_config.model.target_forcing
+        if OmegaConf.is_config(config):
+            config = OmegaConf.to_container(config, resolve=True)
+        return {name: dict(entry) for name, entry in config.items()}
+
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
         """Compute per-dataset input/output channel counts, dimensions and internal data indices."""
         # Multi-dataset: create dictionaries for each property
@@ -250,7 +281,12 @@ class BaseGraphModel(nn.Module):
             )
             return 0
 
-        return self.decoders_target_input[self.dataset2decoder[dataset_name]].dim
+        target_dim = self.decoders_target_input[self.dataset2decoder[dataset_name]].dim
+        if dataset_name in self.target_forcing:
+            config = self.target_forcing[dataset_name]
+            target_dim += len(config.get("data", [])) + int(config.get("time_fraction", True))
+            target_dim += int(config.get("time_noise_channels", 0) or 0)
+        return target_dim
 
     def _calculate_output_dim(self, dataset_name: str) -> int:
         """Calculate the decoder output dimension for a given dataset."""
