@@ -115,7 +115,7 @@ class BaseForecaster(BaseTask):
                 all_offsets.add(o + shift)
         return sorted(all_offsets)
 
-    def get_offsets(self, mode: str | None = None) -> list[datetime.timedelta]:
+    def get_offsets(self, mode: str | None = None, **_kwargs) -> list[datetime.timedelta]:
         if mode in ("training", "validation"):
             rollout_step = len(self.steps(mode))
         else:

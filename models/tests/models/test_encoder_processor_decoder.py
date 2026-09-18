@@ -14,6 +14,7 @@ from torch import nn
 
 from anemoi.models.layers.aggregator import PointwiseCrossAttentionAggregator
 from anemoi.models.models.encoder_processor_decoder import AnemoiModelEncProcDec
+from anemoi.models.models.ens_encoder_processor_decoder import AnemoiEnsModelEncProcDec
 
 
 class _AggregationReached(RuntimeError):
