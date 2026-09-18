@@ -38,18 +38,24 @@ def _intersect_anchor_rows(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         np.ascontiguousarray(a).view(dtype),
         np.ascontiguousarray(b).view(dtype),
     )
-    return common.view(a.dtype).reshape(-1, 2)
+    rows = common.view(a.dtype).reshape(-1, 2)
+    # intersect1d sorts the void views byte-wise (little-endian), which is not
+    # numeric order for multi-byte values; restore (sequence, position) order.
+    return rows[np.lexsort((rows[:, 1], rows[:, 0]))]
 
 
 def compute_valid_anchors(
     data_readers: dict[str, "BaseAnemoiReader"],
     relative_date_indices: dict[str, np.ndarray | list[int]],
 ) -> np.ndarray:
-    """Return the valid ``(sequence, position)`` anchors shared by all readers.
+    """Return the valid ``(sequence, anchor_key)`` anchors shared by all readers.
 
-    An anchor ``(s, p)`` is valid if every reader can sample the positions
-    ``p + i`` for all of its relative offsets ``i`` within sequence ``s``.
-    Returns the intersection of the valid anchors across all data readers.
+    An anchor is valid if every reader can sample all of its relative offsets
+    around the anchor date within the anchor's sequence. Each reader's local
+    positions are canonicalized to reader-independent anchor keys
+    (``BaseAnemoiReader.positions_to_anchor_keys``) before intersecting, so
+    readers with different frequencies or start dates intersect by date rather
+    than by raw index.
 
     Parameters
     ----------
@@ -61,8 +67,8 @@ def compute_valid_anchors(
     Returns
     -------
     np.ndarray
-        Array of shape ``(n_anchors, 2)`` with the shared ``(sequence, position)``
-        anchors.
+        Array of shape ``(n_anchors, 2)`` with the shared
+        ``(sequence, anchor_key)`` anchors.
     """
     intersection: np.ndarray | None = None
     for dataset_name, ds in data_readers.items():
@@ -71,6 +77,16 @@ def compute_valid_anchors(
         if len(anchors) == 0:
             msg = f"No valid anchors found for data reader '{dataset_name}': {ds}"
             raise ValueError(msg)
+
+        # Canonicalize local positions to reader-independent anchor keys. Some
+        # lightweight reader doubles (and older reader implementations) do not
+        # provide this optional conversion; in that case, retain the local
+        # positions so same-frequency readers keep their historical behaviour.
+        anchor_keys = ds.positions_to_anchor_keys(anchors[:, 1])
+        anchor_keys = np.asarray(anchor_keys)
+        if anchor_keys.shape != anchors[:, 1].shape:
+            anchor_keys = anchors[:, 1]
+        anchors = np.stack([anchors[:, 0], anchor_keys], axis=1)
 
         intersection = anchors if intersection is None else _intersect_anchor_rows(intersection, anchors)
 

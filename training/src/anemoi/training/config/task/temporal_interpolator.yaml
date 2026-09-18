@@ -1,0 +1,20 @@
+_target_: anemoi.training.tasks.TemporalInterpolator
+# Width of the input window: every dataset receives (t+0, t+input_timestep) as input.
+input_timestep: 6H
+# Target times as fractions of the input window in [0, 1]:
+# 0 = t+0, 1 = t+input_timestep, 0.5 = the midpoint.
+# Defaults: hourly intermediate steps of a 6h window (t+1h .. t+5h).
+target_fractions: [0.16667, 0.33333, 0.5, 0.66667, 0.83333]
+# Datasets that provide targets at the intermediate times; all others are input-only.
+target_datasets: []
+# Per-target-dataset decoder conditioning:
+#   data: forcing variables sampled at the target time (e.g. insolation)
+#   time_fraction: append the target fraction as a scalar feature
+target_forcing: {}
+# Stochastic fraction sampling: decode only this many randomly drawn fractions per
+# training step (unbiased estimator of the full-fraction loss at proportionally
+# lower cost; validation always decodes all fractions). null = decode all.
+target_fractions_per_step: null
+# Subset draw mode: uniform (scattered) or block (contiguous fractions, keeps
+# adjacent hours together for temporal-difference loss terms).
+fraction_sampling: uniform
