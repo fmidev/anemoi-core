@@ -271,6 +271,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
                     edges=enc_edge_shard_sizes,
                 )
 
+                # Encoder for this dataset
                 x_data_latent, x_latent = self.encoder[dataset_name](
                     (x_data_latent, x_hidden_latent),
                     batch_size=batch_size,

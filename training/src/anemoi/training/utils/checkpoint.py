@@ -47,6 +47,50 @@ def _filter_state_dict_size_mismatches(
             del state_dict[key]
 
 
+def apply_warm_start_map(
+    state_dict: dict[str, torch.Tensor],
+    model_state_dict: dict[str, torch.Tensor],
+    key_map: dict[str, str],
+    prefix: str = "model.model.",
+) -> dict[str, dict[str, int]]:
+    """Copy checkpoint tensors from `src` module paths to `dst` module paths (both relative to
+    the graph model; `prefix` is the graph model's prefix inside the Lightning state dict).
+
+    A tensor is copied only when the destination key exists in the model, is NOT already in
+    the checkpoint (a resume leg already carries trained head weights), and the shapes match
+    (the head's ConditionalLayerNorm conditioning tensors differ from the trunk's and are
+    expected to be skipped). Mutates `state_dict` in place; returns per-mapping counts.
+    Raises when a mapping copies nothing and finds nothing present: a warm start was asked
+    for that could not happen.
+    """
+    if not key_map:
+        return {}
+    if not any(key.startswith(prefix + "processor.") for key in state_dict):
+        raise ValueError(f"warm start: no checkpoint key starts with prefix {prefix + 'processor.'!r}")
+    report: dict[str, dict[str, int]] = {}
+    for dst, src in key_map.items():
+        counts = {"copied": 0, "present_in_ckpt": 0, "shape_mismatch": 0, "not_in_model": 0}
+        src_prefix = f"{prefix}{src}."
+        dst_prefix = f"{prefix}{dst}."
+        for key in list(state_dict):
+            if not key.startswith(src_prefix):
+                continue
+            dst_key = dst_prefix + key[len(src_prefix) :]
+            if dst_key not in model_state_dict:
+                counts["not_in_model"] += 1
+            elif dst_key in state_dict:
+                counts["present_in_ckpt"] += 1
+            elif state_dict[key].shape != model_state_dict[dst_key].shape:
+                counts["shape_mismatch"] += 1
+            else:
+                state_dict[dst_key] = state_dict[key].clone()
+                counts["copied"] += 1
+        if counts["copied"] == 0 and counts["present_in_ckpt"] == 0:
+            raise ValueError(f"warm start {dst} <- {src}: nothing copied and nothing present ({counts})")
+        report[dst] = counts
+    return report
+
+
 def load_and_prepare_model(lightning_checkpoint_path: str) -> tuple[torch.nn.Module, dict]:
     """Load the lightning checkpoint and extract the pytorch model and its metadata.
 
@@ -114,6 +158,16 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
     # Filter out layers with size mismatch
     state_dict = checkpoint["state_dict"]
     _filter_state_dict_size_mismatches(state_dict, model.state_dict())
+
+    # Warm start of new head modules from trunk weights (anchor-encoder head, spec 2026-09-13):
+    # the graph model advertises dst<-src module paths; copy before loading.
+    graph_model = getattr(getattr(model, "model", None), "model", None)
+    key_map_fn = getattr(graph_model, "warm_start_key_map", None)
+    key_map = key_map_fn() if callable(key_map_fn) else {}
+    if key_map:
+        report = apply_warm_start_map(state_dict, model.state_dict(), key_map)
+        for dst, counts in report.items():
+            LOGGER.info("Warm start %s <- %s: %s", dst, key_map[dst], counts)
 
     # Runtime migration: the graph-provider permutation depends on instantiated provider state.
     checkpoint = trainable_edge_perm_fix_migration(checkpoint, model)

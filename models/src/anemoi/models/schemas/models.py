@@ -248,6 +248,128 @@ class Boolean1DSchema(BaseModel):
 OutputMaskSchemas = Union[NoOutputMaskSchema, Boolean1DSchema]
 
 
+class HeadProcessorSchema(TransformerModelComponent):
+    """Optional per-dataset processor for a fraction-conditioned head (see
+    ``TargetForcingSchema.processor``).
+
+    Applied to the shared trunk latent (``x_latent_proc``) INSIDE the fraction loop
+    (``AnemoiEnsModelEncProcDec._decode_target_times``), once per target fraction,
+    with the fraction as conditioning - the same ``cond`` mechanism the trunk's own
+    noise injector uses on the shared processor. A processor applied once BEFORE the
+    fraction loop would be fraction-independent: it would add parameters and no
+    capability, since it could not place a feature in time.
+
+    Omitting this field entirely (the default) leaves the interpolation head exactly
+    as a decoder reading the frozen trunk's latent - today's behaviour, unchanged.
+
+    Runs on the trunk's EXISTING hidden-to-hidden graph and edges
+    (``processor_graph_provider``) - no separate graph or trainable edge parameters
+    are built. The trunk latent (``model.num_channels`` wide, 1024 in the reference
+    config) is linearly projected down to `num_channels`, processed by `num_layers`
+    layers of the chosen processor type, projected back up, and added to the trunk
+    latent as a residual; the up-projection is zero-initialised, so an untrained head
+    processor starts as a no-op.
+
+    ``latent_input`` selects which latents the head reads (trunk / anchor / both) and
+    ``warm_start_layers`` marks it for copying trunk processor layers at load time;
+    see those fields.
+    """
+
+    target_: Literal[
+        "anemoi.models.layers.processor.GraphTransformerProcessor",
+        "anemoi.models.layers.processor.GNNProcessor",
+        "anemoi.models.layers.processor.TransformerProcessor",
+        "anemoi.models.layers.processor.PointWiseMLPProcessor",
+    ] = Field(default="anemoi.models.layers.processor.GraphTransformerProcessor", alias="_target_")
+    "Processor layer type. Defaults to the trunk's own GraphTransformerProcessor."
+
+    anchor_skip: bool = Field(default=False)
+    """Also feed the head processor the trunk ENCODER's output (``x_latent``: the encoded
+    anchor pair, before the trunk processor turned it into a forecast latent), through its
+    own down-projection added to the processed latent's. The trunk's ``latent_skip`` already
+    sums ``x_latent`` INTO ``x_latent_proc``, so this adds no information the head lacks; it
+    makes the encoder term SEPARABLE from the processor's transformation, which a linear read
+    of the sum cannot do. Off by default: a head trained without it has no ``skip_proj``
+    weights, and checkpoints pickled before this option existed load and run unchanged."""
+
+    latent_input: Literal["trunk", "anchor", "both"] = Field(default="trunk")
+    """Which latents the head reads and what its output residual is taken on. trunk: the frozen
+    trunk's processed latent (today's behaviour). anchor: only x_anchor (the anchor encoder's output,
+    or the frozen encoder's if none is configured) - the HourGlass-clone control, no trunk information
+    reaches the decoder through this head. both: sum of the two projections, residual on the trunk latent.
+    anchor_skip: true is an alias for both."""
+
+    warm_start_layers: Literal["last", "first"] | None = Field(default=None)
+    """Copy the trunk processor's last (or first) num_layers layers into this head at transfer-learning load
+    time (see anemoi.training.utils.checkpoint.apply_warm_start_map). Requires num_channels equal to the
+    trunk's; in_proj is then initialised to the identity so the copied layers see the latent they were
+    trained on."""
+
+    num_layers: PositiveInt = Field(default=2)
+    "Depth of the head processor. Compute, and (via checkpoint_fraction_loop) peak memory, scale ~linearly with this."
+
+    num_channels: PositiveInt = Field(default=256)
+    """Width of the head processor - independent of the trunk's `model.num_channels`
+    (1024). Chosen small for memory: the dominant activation tensor per fraction has
+    shape (hidden_nodes=284,906 x num_channels x ensemble_members). Must divide evenly
+    by `num_heads` for the GraphTransformer/Transformer layer types."""
+
+    num_heads: NonNegativeInt = Field(default=8)
+    "Attention heads (GraphTransformer/Transformer layer types only). Must divide num_channels."
+
+    num_chunks: NonNegativeInt = Field(default=1)
+    """Layer-chunking for the PROCESSOR'S OWN internal gradient checkpointing
+    (`gradient_checkpointing`, inherited below) - independent of the separate, OUTER
+    per-fraction checkpoint (`checkpoint_fraction_loop`)."""
+
+    mlp_hidden_ratio: PositiveFloat = Field(default=4)
+    "Ratio of MLP hidden dimension to num_channels."
+
+    qk_norm: bool = Field(default=True)
+    "Normalize query and key vectors (GraphTransformer/Transformer layer types only)."
+
+    cpu_offload: bool = Field(default=False)
+    "Offload processing to CPU."
+
+    checkpoint_fraction_loop: bool = Field(default=True)
+    """Wrap the WHOLE per-fraction call (down-projection, processor, up-projection,
+    residual add) in one outer `torch.utils.checkpoint` segment, on top of the
+    processor's own internal per-layer-chunk checkpointing (`gradient_checkpointing`).
+
+    MEMORY SCALING: without this, activations of shape (hidden_nodes=284,906 x
+    num_channels x ensemble_members) are held SIMULTANEOUSLY for every target
+    fraction decoded in a training step (5 by default in
+    config-interp-sfc-hgspec*.yaml) - peak memory scales O(num_fractions). With it
+    (the default), only one fraction's activations are ever resident at a time,
+    recomputed during backward, so peak memory from this module is O(1) in the
+    number of fractions (at the cost of one extra forward recompute per fraction
+    during backward)."""
+
+    @model_validator(mode="after")
+    def _resolve_anchor_skip_alias(self) -> "HeadProcessorSchema":
+        if self.anchor_skip:
+            if self.latent_input == "anchor":
+                raise ValueError("anchor_skip: true means latent_input: both; it conflicts with latent_input: anchor")
+            # Plain assignment triggers validate_assignment, which reruns this same "after"
+            # validator and recurses forever; bypass it with object.__setattr__ instead.
+            object.__setattr__(self, "latent_input", "both")
+        return self
+
+
+class AnchorEncoderSchema(BaseModel):
+    """Optional TRAINABLE copy of the trunk encoder of ``source`` whose output feeds the
+    interpolation head as ``x_anchor`` (see ``HeadProcessorSchema.latent_input``). Built with
+    the trunk encoder's own constructor arguments over the trunk's existing
+    ``source -> hidden`` edges (shared graph provider, no new graph). Lives under the
+    top-level module name ``anchor_encoder`` so ``training.submodules_to_freeze`` entries
+    such as ``encoder.data`` do not freeze it."""
+
+    source: str = Field(default="data")
+    "Dataset whose trunk encoder is copied and whose input the copy reads (must not be in encoder.skip)."
+    warm_start: bool = Field(default=True)
+    "Copy the weights of encoder.<source> into this module at transfer-learning load time."
+
+
 class TargetForcingSchema(BaseModel):
     """Fraction-conditioned decoding of a dataset (temporal interpolation head).
 
@@ -284,6 +406,15 @@ class TargetForcingSchema(BaseModel):
     variability. These channels restore that freedom. The draw is shared across grid
     points so it perturbs the amplitude/phase of the spatially structured latent
     rather than adding spatially white noise to the output. 0 disables it."""
+    processor: Optional[HeadProcessorSchema] = Field(default=None)
+    """Optional processor applied to the shared trunk latent inside this dataset's
+    fraction loop, once per target fraction, conditioned on the fraction (see
+    HeadProcessorSchema). Omitted (the default, None) leaves the head exactly as a
+    decoder onto the frozen trunk's latent - unaffected by this option's existence."""
+    anchor_encoder: Optional[AnchorEncoderSchema] = Field(default=None)
+    """Optional trainable copy of a trunk encoder, whose output feeds the head processor as
+    x_anchor (see AnchorEncoderSchema, HeadProcessorSchema.latent_input). Omitted (the
+    default, None) leaves x_anchor as the frozen trunk encoder's own output, unchanged."""
 
 
 class BaseModelSchema(PydanticBaseModel):
