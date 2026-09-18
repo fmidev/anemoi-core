@@ -25,6 +25,7 @@ from anemoi.models.distributed.shapes import DatasetShardSizes
 from anemoi.models.distributed.shapes import GraphShardInfo
 from anemoi.models.distributed.shapes import ShardSizes
 from anemoi.models.distributed.shapes import get_shard_sizes
+from anemoi.models.layers.utils import maybe_checkpoint
 from anemoi.models.models import AnemoiModelEncProcDec
 from anemoi.utils.config import DotDict
 
@@ -64,6 +65,7 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             graph_data=self._graph_data,
             sparse_projector_num_chunks=model_config.model.get("sparse_projector", {}).get("num_chunks", 1),
         )
+
 
     def _calculate_input_dim(self, dataset_name: str) -> int:
         base_input_dim = super()._calculate_input_dim(dataset_name)
@@ -164,6 +166,7 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         fcstep: int,
         model_comm_group: Optional[ProcessGroup] = None,
         grid_shard_sizes: DatasetShardSizes | None = None,
+        target_times: dict[str, dict[str, Tensor]] | None = None,
         **kwargs,
     ) -> dict[str, Tensor]:
         """Forward operator.
@@ -179,6 +182,12 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         grid_shard_sizes : DatasetShardSizes, optional
             Per-dataset shard sizes for the grid dimension. ``None`` means the
             corresponding dataset is replicated, not sharded.
+        target_times : dict[str, dict[str, Tensor]], optional
+            Per-dataset conditioning for fraction-conditioned decoding, required
+            for every dataset configured in ``model.target_forcing``. Entries are
+            ``{"fractions": (T,), "forcings": (bs, T, ens, grid, F) | None}``;
+            the dataset's decoder is invoked once per target time and the outputs
+            are stacked along the time dimension.
         **kwargs
             Additional keyword arguments
 
@@ -239,7 +248,6 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                     edges=enc_edge_shard_sizes,
                 )
 
-                # Encoder for this dataset
                 x_data_latent, x_latent = self.encoder[dataset_name](
                     (x_data_latent, x_hidden_latent),
                     batch_size=batch_ens_size,
@@ -288,6 +296,8 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         if self.latent_skip:
             x_latent_proc = x_latent_proc + x_latent
 
+        proc_shard_info = GraphShardInfo(nodes=shard_sizes_hidden, edges=proc_edge_shard_sizes)
+
         x_out_dict = {}
         for dataset_name in dataset_names:
             # Compute decoder edges using updated latent representation
@@ -306,23 +316,254 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 edges=dec_edge_shard_sizes,
             )
 
-            x_out = self.decoder[dataset_name](
-                (x_latent_proc, x_data_latent_dict[dataset_name]),
-                batch_size=batch_ens_size,
-                shard_info=dec_shard_info,
-                edge_attr=decoder_edge_attr,
-                edge_index=decoder_edge_index,
-                model_comm_group=model_comm_group,
-                keep_x_dst_sharded=in_out_sharded[dataset_name],  # keep x_out sharded iff in_out_sharded
-            )
+            def _decode(
+                x_dst: torch.Tensor,
+                x_src: torch.Tensor | None = None,
+                dataset_name: str = dataset_name,
+                edge_attr: Tensor = decoder_edge_attr,
+                edge_index: Tensor = decoder_edge_index,
+                shard_info: BipartiteGraphShardInfo = dec_shard_info,
+            ) -> torch.Tensor:
+                return self.decoder[dataset_name](
+                    # noqa: B023 called within the same loop iteration
+                    (x_latent_proc if x_src is None else x_src, x_dst),
+                    batch_size=batch_ens_size,
+                    shard_info=shard_info,
+                    edge_attr=edge_attr,
+                    edge_index=edge_index,
+                    model_comm_group=model_comm_group,
+                    keep_x_dst_sharded=in_out_sharded[dataset_name],  # keep x_out sharded iff in_out_sharded
+                )
 
-            x_out_dict[dataset_name] = self._assemble_output(
+            if dataset_name in self.target_forcing:
+                assert (
+                    target_times is not None and dataset_name in target_times
+                ), f"forward() requires target_times['{dataset_name}'] for fraction-conditioned dataset"
+
+                x_out_dict[dataset_name] = self._decode_target_times(
+                    _decode,
+                    x=x[dataset_name],
+                    x_data_latent=x_data_latent_dict[dataset_name],
+                    x_skip=x_skip_dict[dataset_name],
+                    dataset_target_times=target_times[dataset_name],
+                    batch_size=batch_size,
+                    batch_ens_size=batch_ens_size,
+                    ensemble_size=ensemble_size,
+                    dataset_name=dataset_name,
+                )
+            else:
+                x_out = _decode(x_data_latent_dict[dataset_name])
+
+                x_out_dict[dataset_name] = self._assemble_output(
+                    x_out,
+                    x_skip_dict[dataset_name],
+                    batch_size,
+                    batch_ens_size,
+                    dtype=x[dataset_name].dtype,
+                    dataset_name=dataset_name,
+                )
+
+        return x_out_dict
+
+    def _decode_target_times(
+        self,
+        decode: callable,
+        *,
+        x: torch.Tensor,
+        x_data_latent: torch.Tensor,
+        x_skip: torch.Tensor | None,
+        dataset_target_times: dict[str, Tensor],
+        batch_size: int,
+        batch_ens_size: int,
+        ensemble_size: int,
+        dataset_name: str,
+    ) -> torch.Tensor:
+        """Decode a fraction-conditioned dataset once per target time.
+
+        Each decoder invocation receives the shared dst features extended with
+        the target-time forcings and (optionally) the time-fraction scalar; the
+        per-time outputs are stacked along the time dimension.
+
+        Parameters
+        ----------
+        decode : callable
+            Single-invocation decoder closure mapping dst features to raw output.
+        x : torch.Tensor
+            The dataset's (normalized) input states, shape (bs, 2, ens, grid, vars).
+        x_data_latent : torch.Tensor
+            Assembled dst features shared by all target times, shape ((bs ens grid), D).
+        x_skip : torch.Tensor | None
+            Standard residual, or None if the dataset's residual is skipped.
+        dataset_target_times : dict[str, Tensor]
+            ``{"fractions": (T,), "forcings": (bs, T, ens, grid, F) | None}``.
+        batch_size : int
+            Batch size.
+        batch_ens_size : int
+            Merged batch and ensemble size.
+        ensemble_size : int
+            Ensemble size per device.
+        dataset_name : str
+            Dataset being decoded.
+
+        Returns
+        -------
+        torch.Tensor
+            Stacked output, shape (bs, T, ens, grid, vars_out).
+        """
+        config = self.target_forcing[dataset_name]
+        fractions = dataset_target_times["fractions"]
+        forcings = dataset_target_times.get("forcings")
+
+        expected_forcings = len(config.get("data", []))
+        if expected_forcings:
+            assert forcings is not None and forcings.shape[-1] == expected_forcings, (
+                f"Dataset '{dataset_name}': expected {expected_forcings} target-time forcings "
+                f"{config.get('data')}, got {None if forcings is None else forcings.shape[-1]}"
+            )
+            if forcings.shape[2] != ensemble_size:
+                forcings = forcings.expand(-1, -1, ensemble_size, -1, -1)
+
+        outputs = []
+        for step in range(fractions.shape[0]):
+            features = [x_data_latent]
+            if expected_forcings:
+                features.append(
+                    einops.rearrange(forcings[:, step], "batch ensemble grid vars -> (batch ensemble grid) vars"),
+                )
+            n_time_noise = int(config.get("time_noise_channels", 0) or 0)
+            if n_time_noise:
+                # Drawn INSIDE the fraction loop: the trunk's noise injector fires once
+                # per forward, so without this every target time of a given member
+                # shares one perturbation and the member's trajectory is a smooth
+                # deterministic function of the fraction alone. Shared across grid
+                # points (repeat_interleave over the (batch ensemble grid) row order)
+                # so it modulates the spatially structured latent instead of adding
+                # spatially white noise.
+                grid_points = x_data_latent.shape[0] // batch_ens_size
+                noise = torch.randn(
+                    batch_ens_size,
+                    n_time_noise,
+                    device=x_data_latent.device,
+                    dtype=x_data_latent.dtype,
+                )
+                features.append(noise.repeat_interleave(grid_points, dim=0))
+            if config.get("time_fraction", True):
+                features.append(
+                    torch.full(
+                        (x_data_latent.shape[0], 1),
+                        float(fractions[step]),
+                        device=x_data_latent.device,
+                        dtype=x_data_latent.dtype,
+                    ),
+                )
+
+            x_out = decode(torch.cat(features, dim=-1))
+
+            out_step = self._assemble_output(
                 x_out,
-                x_skip_dict[dataset_name],
+                x_skip,
                 batch_size,
                 batch_ens_size,
-                dtype=x[dataset_name].dtype,
+                dtype=x.dtype,
                 dataset_name=dataset_name,
             )
 
-        return x_out_dict
+            # Anchor state added to the prognostic outputs (normalized space): the head
+            # then learns the departure from it. Must not rebind x_skip: that is the
+            # standard residual reused by every subsequent _assemble_output call.
+            anchor = self.anchor_for_dataset(dataset_name, x, fractions[step], config)
+            if anchor is not None:
+                out_step[..., self._internal_output_idx[dataset_name]] += anchor
+
+            outputs.append(out_step)
+
+        return torch.cat(outputs, dim=1)
+
+    ANCHOR_MODES = ("linear", "backward", "forward", "none")
+
+    @classmethod
+    def anchor_mode(cls, config: dict) -> str | dict[str, str]:
+        """Resolve the anchor setting of a fraction-conditioned dataset.
+
+        Returns one mode for all prognostic variables, or a ``{variable: mode}`` mapping
+        (optionally with a ``default`` key) when the config gives one per variable.
+        ``anchor`` takes precedence; the older boolean ``linear_residual`` maps to
+        ``linear`` / ``none`` so existing configs and checkpoints keep their behaviour.
+        """
+        mode = config.get("anchor")
+        if mode is None:
+            mode = "linear" if config.get("linear_residual", False) else "none"
+        if isinstance(mode, dict):
+            bad = {k: v for k, v in mode.items() if v not in cls.ANCHOR_MODES}
+            if bad:
+                msg = f"Unknown anchor mode(s) {bad}; expected one of {cls.ANCHOR_MODES}"
+                raise ValueError(msg)
+            return dict(mode)
+        if mode not in cls.ANCHOR_MODES:
+            msg = f"Unknown anchor mode {mode!r}; expected one of {cls.ANCHOR_MODES}"
+            raise ValueError(msg)
+        return mode
+
+    def anchor_for_dataset(
+        self, dataset_name: str, x: torch.Tensor, fraction: torch.Tensor | float, config: dict
+    ) -> torch.Tensor | None:
+        """Anchor for the dataset's prognostic outputs, shape (bs, 1, ens, grid, n_prognostic).
+
+        Uniform mode: the same anchor state for every prognostic variable. Per-variable
+        mapping: each prognostic output variable gets its own mode (``default`` covers the
+        rest; without ``default`` the fallback is the ``linear_residual`` behaviour), so
+        e.g. 2t/msl can keep the linear-interpolation prior while cloud or wind anchor on
+        x(t+6) or on nothing. Returns None when no variable is anchored.
+        """
+        mode = self.anchor_mode(config)
+        in_idx = self._internal_input_idx[dataset_name]
+        if isinstance(mode, str):
+            if mode == "none":
+                return None
+            return self.anchor_state(x, fraction, mode)[..., in_idx]
+
+        output_index = self.data_indices[dataset_name].model.output
+        names = [output_index.full_index_to_name[int(i)] for i in self._internal_output_idx[dataset_name]]
+        unknown = set(mode) - set(names) - {"default"}
+        if unknown:
+            msg = (
+                f"anchor mapping for dataset {dataset_name!r} names variables that are not "
+                f"prognostic outputs: {sorted(unknown)} (prognostic: {names})"
+            )
+            raise ValueError(msg)
+        default = mode.get("default", "linear" if config.get("linear_residual", False) else "none")
+        modes = [mode.get(name, default) for name in names]
+        if all(m == "none" for m in modes):
+            return None
+        in_positions = [int(i) for i in in_idx]
+        anchor = torch.zeros_like(x[:, 0:1][..., in_positions])
+        for m in set(modes):
+            if m == "none":
+                continue
+            sel = [k for k, mm in enumerate(modes) if mm == m]
+            anchor[..., sel] = self.anchor_state(x, fraction, m)[..., [in_positions[k] for k in sel]]
+        return anchor
+
+    @staticmethod
+    def anchor_state(x: torch.Tensor, fraction: torch.Tensor | float, mode: str) -> torch.Tensor:
+        """State added to the decoder output at time fraction ``fraction`` of the window.
+
+        x holds the two bracketing input states, shape (bs, 2, ens, grid, vars).
+
+        linear   : (1-f) x(t0) + f x(t1)  - the residual is the departure from linear
+                   interpolation (small and smooth for 2t / msl, a poor prior for cloud
+                   or wind).
+        backward : x(t1)                  - HourGlass's backward skip: residual from the
+                   LATER analysis, exact at f=1.
+        forward  : x(t0)                  - persistence from the earlier analysis, exact
+                   at f=0.
+        Returns shape (bs, 1, ens, grid, vars).
+        """
+        if mode == "linear":
+            return (1 - fraction) * x[:, 0:1] + fraction * x[:, 1:2]
+        if mode == "backward":
+            return x[:, 1:2]
+        if mode == "forward":
+            return x[:, 0:1]
+        msg = f"anchor_state called with mode {mode!r}"
+        raise ValueError(msg)

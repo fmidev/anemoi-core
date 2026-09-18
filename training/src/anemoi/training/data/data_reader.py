@@ -244,6 +244,39 @@ class BaseAnemoiReader:
         """Return dataset frequency."""
         return self.data.frequency
 
+    # ------------------------------------------------------------------
+    # Anchor canonicalization
+    #
+    # Raw positions index each reader's own date axis, so they are only
+    # comparable across readers with identical start dates and frequencies.
+    # Anchor keys (epoch seconds of the anchor date) are reader-independent,
+    # which allows intersecting anchors across readers with different
+    # frequencies (e.g. a 6h and a 1h dataset).
+    # ------------------------------------------------------------------
+
+    @cached_property
+    def _date0_seconds(self) -> int:
+        return int(np.asarray(self.dates[0]).astype("datetime64[s]").astype(np.int64))
+
+    @cached_property
+    def _frequency_seconds(self) -> int:
+        return int(self.frequency.total_seconds())
+
+    def positions_to_anchor_keys(self, positions: np.ndarray) -> np.ndarray:
+        """Map local time positions to canonical anchor keys (epoch seconds)."""
+        return np.asarray(self.dates)[positions].astype("datetime64[s]").astype(np.int64)
+
+    def anchor_key_to_position(self, anchor_key: int) -> int:
+        """Map a canonical anchor key (epoch seconds) back to a local time position."""
+        delta = anchor_key - self._date0_seconds
+        if delta < 0 or delta % self._frequency_seconds:
+            msg = (
+                f"Anchor key {anchor_key}s is not on this reader's date axis "
+                f"(start={self._date0_seconds}s, frequency={self._frequency_seconds}s)."
+            )
+            raise ValueError(msg)
+        return int(delta // self._frequency_seconds)
+
     @property
     def supporting_arrays(self) -> dict:
         """Return dataset supporting_arrays."""
@@ -404,6 +437,14 @@ class TrajectoryDataset(BaseAnemoiReader):
     def missing_positions(self, sequence: int = 0) -> set[int]:  # noqa: ARG002
         """Forecast datasets do not track per-step missing values."""
         return set()
+
+    def positions_to_anchor_keys(self, positions: np.ndarray) -> np.ndarray:
+        """Trajectory positions are forecast steps; they are their own anchor keys."""
+        return np.asarray(positions, dtype=np.int64)
+
+    def anchor_key_to_position(self, anchor_key: int) -> int:
+        """Trajectory positions are forecast steps; they are their own anchor keys."""
+        return int(anchor_key)
 
     @property
     def frequency(self) -> datetime.timedelta:

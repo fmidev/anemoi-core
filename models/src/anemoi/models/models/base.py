@@ -16,6 +16,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from omegaconf import ListConfig
+from omegaconf import OmegaConf
 from torch import Tensor
 from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
@@ -82,6 +83,9 @@ class BaseGraphModel(nn.Module):
         else:
             self.residuals_to_skip = []
 
+        # Fraction-conditioned decoding (temporal interpolation heads), keyed by dataset name.
+        self.target_forcing = self._parse_target_forcing(model_config)
+
         self.num_channels = model_config.model.num_channels
         self.latent_skip = model_config.model.model.latent_skip
 
@@ -106,6 +110,21 @@ class BaseGraphModel(nn.Module):
         # Instantiation of model output bounding functions (e.g., to ensure outputs like TP are positive definite)
         # Multi-dataset: create ModuleDict with ModuleList per dataset
         self.boundings = build_boundings(model_config, self.data_indices, self.statistics)
+
+    @staticmethod
+    def _parse_target_forcing(model_config: DictConfig) -> dict:
+        """Parse ``model.target_forcing`` into plain python containers.
+
+        The mapping is embedded in the checkpoint inference metadata
+        (``fill_metadata``), which must be JSON serializable, so OmegaConf
+        nodes are deep-converted rather than kept as DictConfig/ListConfig.
+        """
+        if "target_forcing" not in model_config.model or not model_config.model.target_forcing:
+            return {}
+        config = model_config.model.target_forcing
+        if OmegaConf.is_config(config):
+            config = OmegaConf.to_container(config, resolve=True)
+        return {name: dict(entry) for name, entry in config.items()}
 
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
         # Multi-dataset: create dictionaries for each property
@@ -170,7 +189,15 @@ class BaseGraphModel(nn.Module):
     def _calculate_target_dim(self, dataset_name: str) -> int:
         # Default behaviour is to pass the same input as to the encoder.
         # TODO: abstract different options into the base class
-        return self._calculate_input_dim(dataset_name)
+        target_dim = self._calculate_input_dim(dataset_name)
+        if dataset_name in self.target_forcing:
+            # Fraction-conditioned decoding: the decoder dst input is extended with
+            # the target-time forcings and (optionally) the time-fraction scalar.
+            config = self.target_forcing[dataset_name]
+            target_dim += len(config.get("data", [])) + int(config.get("time_fraction", True))
+            # Per-target-time noise channels, if requested.
+            target_dim += int(config.get("time_noise_channels", 0) or 0)
+        return target_dim
 
     def _calculate_output_dim(self, dataset_name: str) -> int:
         return self.n_step_output * self.num_output_channels[dataset_name]

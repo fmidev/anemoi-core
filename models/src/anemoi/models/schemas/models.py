@@ -39,6 +39,7 @@ from .encoder import GNNEncoderSchema  # noqa: TC001
 from .encoder import GraphTransformerEncoderSchema  # noqa: TC001
 from .encoder import PointWiseForwardMapperSchema  # noqa: TC001
 from .encoder import TransformerEncoderSchema  # noqa: TC001
+from .common_components import TransformerModelComponent  # noqa: TC001
 from .processor import GNNProcessorSchema  # noqa: TC001
 from .processor import GraphTransformerProcessorSchema  # noqa: TC001
 from .processor import NoOpProcessorSchema  # noqa: TC001
@@ -247,9 +248,49 @@ class Boolean1DSchema(BaseModel):
 OutputMaskSchemas = Union[NoOutputMaskSchema, Boolean1DSchema]
 
 
+class TargetForcingSchema(BaseModel):
+    """Fraction-conditioned decoding of a dataset (temporal interpolation head).
+
+    The dataset's decoder is invoked once per target time; each invocation's
+    dst input is extended with the listed target-time forcings and (optionally)
+    the target time as a fraction of the input window.
+    """
+
+    data: list[str] = Field(default=[])
+    "Forcing variables appended to the decoder dst input at each target time."
+    time_fraction: bool = Field(default=True)
+    "Append the target time as a fraction of the input window in [0, 1]."
+    linear_residual: bool = Field(default=False)
+    "Add the fraction-weighted linear interpolation (1-f)*x(t0) + f*x(t1) to the prognostic outputs."
+    anchor: (
+        Literal["linear", "backward", "forward", "none"]
+        | dict[str, Literal["linear", "backward", "forward", "none"]]
+        | None
+    ) = Field(default=None)
+    """State added to the prognostic outputs, which the head then learns the departure from.
+
+    linear: (1-f) x(t0) + f x(t1), backward: x(t1) (HourGlass's backward skip), forward: x(t0),
+    none: nothing. Either one mode for every prognostic variable, or a mapping
+    {variable: mode, default: mode} to anchor e.g. 2t/msl on the linear interpolation while
+    cloud or wind anchor on x(t1) or on nothing (unlisted variables take `default`).
+    Unset (default) falls back to `linear_residual` (True -> linear, False -> none), so existing
+    configs and checkpoints are unchanged."""
+    time_noise_channels: NonNegativeInt = Field(default=0)
+    """Number of noise channels drawn independently per target time and ensemble member.
+
+    The trunk's noise injector fires once per forward, so a member's decodes at every
+    target time share one perturbation and its trajectory is a smooth deterministic
+    function of the time fraction - members cannot differ in their hour-to-hour
+    variability. These channels restore that freedom. The draw is shared across grid
+    points so it perturbs the amplitude/phase of the spatially structured latent
+    rather than adding spatially white noise to the output. 0 disables it."""
+
+
 class BaseModelSchema(PydanticBaseModel):
     num_channels: NonNegativeInt = Field(example=512)
     "Feature tensor size in the hidden space."
+    target_forcing: dict[str, TargetForcingSchema] = Field(default={})
+    "Fraction-conditioned decoding settings, keyed by dataset name. Defaults to {} (disabled)."
     keep_batch_sharded: bool = Field(default=True)
     "Keep the input batch and the output of the model sharded"
     sparse_projector: SparseProjectorSchema = Field(default_factory=SparseProjectorSchema)
