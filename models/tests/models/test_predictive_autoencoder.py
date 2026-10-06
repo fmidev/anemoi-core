@@ -547,3 +547,15 @@ def test_three_block_codec_reconstruction_backward() -> None:
         for block in [mapper.proc, *mapper.extra_procs]:
             assert _nonzero_gradient(block.parameters())
     assert all(parameter.grad is None for parameter in model.processor.parameters())
+
+
+def test_forcing_indices_exclude_diagnostic_input_columns() -> None:
+    """Forcings follow model-input ordering after diagnostic fields are removed."""
+    indices = IndexCollection(
+        DictConfig({"forcing": ["forcing"], "diagnostic": ["diagnostic"], "target": []}),
+        {"diagnostic": 0, "forcing": 1, "state": 2},
+    )
+    from types import SimpleNamespace
+
+    model = SimpleNamespace(data_indices={"data": indices})
+    assert AnemoiModelPredictiveAutoEncoder._forcing_input_indices(model, "data", ["forcing"]) == [0]

@@ -227,7 +227,7 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
 
     def _forcing_input_indices(self, dataset_name: str, variables: list[str]) -> list[int]:
         """Resolve forcing names into the model's full input tensor positions."""
-        return [self.data_indices[dataset_name].name_to_index[name] for name in variables]
+        return [self.data_indices[dataset_name].model.input.name_to_index[name] for name in variables]
 
     def _validate_forcing_configuration(self, data_indices: dict) -> None:
         """Validate and complete the optional static/temporal forcing split."""
