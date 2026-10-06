@@ -93,8 +93,10 @@ def _configure_smoke(config, tmp_path: Path, graph_path: Path, synthetic: dict) 
     config.model.processor.num_heads = 4
     config.model.processor.gradient_checkpointing = False
     config.model.processor.graph_attention_backend = "pyg"
-    for name in ["encoder", "decoder", "forcing_encoder"]:
-        component = config.model[name]
+    components = [config.model.forcing_encoder]
+    components.extend(component.mapper for component in config.model.encoders.values())
+    components.extend(component.mapper for component in config.model.decoders.values())
+    for component in components:
         component.num_chunks = 1
         component.num_heads = 4
         component.gradient_checkpointing = False
@@ -119,9 +121,11 @@ def _configure_smoke(config, tmp_path: Path, graph_path: Path, synthetic: dict) 
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("codec_layers", [1, 3])
 def test_predictive_autoencoder_train_validation_smoke_writes_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    codec_layers: int,
 ) -> None:
     synthetic = _synthetic_dataset()
     graph_path = _build_graph(tmp_path, synthetic)
@@ -133,15 +137,41 @@ def test_predictive_autoencoder_train_validation_smoke_writes_checkpoint(
     with initialize_config_module(version_base=None, config_module="anemoi.training.config"):
         config = compose(config_name="global_predictive_autoencoder")
     _configure_smoke(config, tmp_path, graph_path, synthetic)
+    for components in [config.model.encoders, config.model.decoders]:
+        for component in components.values():
+            OmegaConf.update(component.mapper, "num_layers", codec_layers, force_add=True)
+    if codec_layers == 3:
+        config.task.forecast_steps = 0
+        config.task.use_previous_state = False
+        config.task.loss_steps = [0]
+        config.training.scalers.datasets.data.reconstruction_time.weights = [1.0]
+        config.training.scalers.datasets.data.time_steps.weights = [1.0]
+        config.training.scalers.datasets.data.forecast_time.weights = [1.0]
+        loss = config.training.training_loss.datasets.data
+        loss.losses = [loss.losses[0]]
+        loss.loss_weights = [1.0]
+        for metric in config.training.validation_metrics.datasets.data.values():
+            metric.scalers = ["node_weights", "reconstruction_time"]
+        config.training.optimization.lr_scheduler = {
+            "_target_": "torch.optim.lr_scheduler.ReduceLROnPlateau",
+            "mode": "min",
+            "factor": 0.8,
+            "patience": 30,
+            "threshold": 1e-3,
+            "threshold_mode": "rel",
+            "min_lr": 3e-7,
+        }
+        config.training.optimization.pl_lr_scheduler.interval = "epoch"
+        OmegaConf.update(
+            config, "training.optimization.pl_lr_scheduler.monitor", "val_multi_dataset_loss", force_add=True
+        )
     OmegaConf.resolve(config)
 
     trainer = AnemoiTrainer(config)
     trainer.train()
 
     checkpoint_root = Path(config.system.output.root) / "checkpoint"
-    training_checkpoints = [
-        path for path in checkpoint_root.rglob("*.ckpt") if not path.name.startswith("inference-")
-    ]
+    training_checkpoints = [path for path in checkpoint_root.rglob("*.ckpt") if not path.name.startswith("inference-")]
     inference_checkpoints = list(checkpoint_root.rglob("inference-*.ckpt"))
     statistics = trainer.model.model.model.latent_scalar_statistics["data"]
 

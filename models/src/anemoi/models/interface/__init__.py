@@ -11,6 +11,7 @@ import uuid
 from typing import Optional
 
 import torch
+from hydra.utils import get_class
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.distributed.distributed_c10d import ProcessGroup
@@ -211,6 +212,11 @@ class AnemoiModelInterface(torch.nn.Module):
             "_target_": self.config.model.model._target_,
             "_convert_": getattr(self.config.model.model, "_convert_", "none"),
         }
+        from anemoi.models.models.predictive_autoencoder import AnemoiModelPredictiveAutoEncoder
+
+        model_kwargs = {}
+        if issubclass(get_class(model_instantiate_config["_target_"]), AnemoiModelPredictiveAutoEncoder):
+            model_kwargs["task_config"] = self.config.get("task", {})
         self.model = instantiate(
             model_instantiate_config,
             model_config=self.config.model,
@@ -219,6 +225,7 @@ class AnemoiModelInterface(torch.nn.Module):
             graph_data=self.graph_data,
             n_step_input=self.n_step_input,
             n_step_output=self.n_step_output,
+            **model_kwargs,
             _recursive_=False,  # Disables recursive instantiation by Hydra
         )
 

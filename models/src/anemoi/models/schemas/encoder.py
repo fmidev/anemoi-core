@@ -14,6 +14,7 @@ from typing import Union
 from pydantic import Field
 from pydantic import NonNegativeFloat
 from pydantic import NonNegativeInt
+from pydantic import PositiveInt
 from pydantic import model_validator
 
 from .common_components import GNNModelComponent
@@ -37,6 +38,8 @@ class GraphTransformerEncoderSchema(TransformerModelComponent):
     "Graph Transfromer Encoder object from anemoi.models.layers.mapper."
     num_channels: NonNegativeInt = Field(example=512)
     "Hidden dimension of the Graph Transformer encoder. Default to 512."
+    num_layers: PositiveInt = Field(default=1)
+    "Number of graph transformer mapper blocks. Default to 1."
     trainable_size: NonNegativeInt = Field(default=0, example=8)
     "Size of trainable parameters vector. Default to 0."
     sub_graph_edge_attributes: list[str] = Field(default_factory=list)

@@ -52,10 +52,16 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
         n_step_input: int,
         n_step_output: int,
         graph_data: HeteroData,
+        task_config: DictConfig | None = None,
     ) -> None:
         if n_step_output < 1:
             raise ValueError("Predictive autoencoding requires at least one decoded loss step.")
-        task_config = model_config.get("task", {})
+        # Accept historical direct callers as well as upstream's model-only config.
+        if "encoders" not in model_config:
+            if task_config is None:
+                task_config = model_config.get("task", {})
+            model_config = model_config.model
+        task_config = task_config or {}
         configured_loss_steps = task_config.get("loss_steps")
         if configured_loss_steps is None:
             # Preserve the existing dense behavior when sparse outputs are not
@@ -81,14 +87,14 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
                 )
         self.current_time_index = int(self.use_previous_state)
 
-        model_settings = model_config.model.model
+        model_settings = model_config.model
         self.expected_num_forcing_fields = model_settings.get("expected_num_forcing_fields")
         self.expected_num_prognostic_fields = model_settings.get("expected_num_prognostic_fields")
         self.require_bottleneck = model_settings.get("require_bottleneck", False)
-        self.num_channels = model_config.model.processor.num_channels
+        self.num_channels = model_config.processor.num_channels
 
-        static_forcing_variables = model_config.model.get("static_forcing_variables")
-        temporal_forcing_variables = model_config.model.get("temporal_forcing_variables")
+        static_forcing_variables = model_config.get("static_forcing_variables")
+        temporal_forcing_variables = model_config.get("temporal_forcing_variables")
         self._static_forcing_configured = static_forcing_variables is not None
         self._temporal_forcing_configured = temporal_forcing_variables is not None
         self._forcing_split_configured = static_forcing_variables is not None or temporal_forcing_variables is not None
@@ -96,8 +102,8 @@ class AnemoiModelPredictiveAutoEncoder(AnemoiModelEncProcDec):
         self.temporal_forcing_variables = list(temporal_forcing_variables or [])
         self._static_forcing_variables_by_dataset: dict[str, list[str]] = {}
         self._temporal_forcing_variables_by_dataset: dict[str, list[str]] = {}
-        self.static_forcing_context_channels = model_config.model.get("static_forcing_context_channels")
-        self.temporal_forcing_context_channels = model_config.model.get("temporal_forcing_context_channels")
+        self.static_forcing_context_channels = model_config.get("static_forcing_context_channels")
+        self.temporal_forcing_context_channels = model_config.get("temporal_forcing_context_channels")
         self._validate_forcing_configuration(data_indices)
 
         super().__init__(

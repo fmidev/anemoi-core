@@ -497,3 +497,53 @@ def test_expected_channel_count_mismatch_fails_with_actionable_message(
             n_step_output=2,
             graph_data=_graph(),
         )
+
+
+def test_three_block_codec_reconstruction_backward() -> None:
+    """A full codec trains all mapper blocks while bypassing the forecast processor."""
+    config = _model_config(require_bottleneck=False)
+    config.task = DictConfig({"loss_steps": [0], "use_previous_state": False})
+    config.model.forcing_encoder.sub_graph_edge_attributes = ["features"]
+    graph = _graph()
+    for source, target in [("data", "hidden"), ("hidden", "data")]:
+        graph[source, "to", target].edge_index = torch.tensor([[src, dst] for dst in range(4) for src in range(4)]).T
+        graph[source, "to", target].features = torch.randn(16, 3)
+    for components, target in [
+        (config.model.encoders, "GraphTransformerForwardMapper"),
+        (config.model.decoders, "GraphTransformerBackwardMapper"),
+    ]:
+        for component in components.values():
+            component.mapper = DictConfig(
+                {
+                    "_target_": f"anemoi.models.layers.mapper.{target}",
+                    "num_channels": 2,
+                    "num_layers": 3,
+                    "num_heads": 1,
+                    "num_chunks": 2,
+                    "mlp_hidden_ratio": 2,
+                    "qk_norm": False,
+                    "trainable_size": 0,
+                    "sub_graph_edge_attributes": ["features"],
+                    "layer_kernels": {},
+                    "graph_attention_backend": "pyg",
+                    "gradient_checkpointing": True,
+                    **({"initialise_data_extractor_zero": False} if "Backward" in target else {}),
+                }
+            )
+    model = AnemoiModelPredictiveAutoEncoder(
+        model_config=config,
+        data_indices=_data_indices(),
+        statistics={"data": {}},
+        n_step_input=1,
+        n_step_output=1,
+        graph_data=graph,
+    )
+    inputs = _input(0, use_previous_state=False)
+    output = model(inputs)["data"]
+    assert output.shape == (2, 1, 1, 4, 3)
+    output.square().mean().backward()
+    for mapper in [*model.encoder.values(), *model.decoder.values()]:
+        assert len(mapper.extra_procs) == 2
+        for block in [mapper.proc, *mapper.extra_procs]:
+            assert _nonzero_gradient(block.parameters())
+    assert all(parameter.grad is None for parameter in model.processor.parameters())

@@ -161,6 +161,7 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
         shard_strategy: str = "edges",
         graph_attention_backend: str = "triton",
         edge_pre_mlp: bool = False,
+        num_layers: int = 1,
         **kwargs,
     ) -> None:
         """Initialize GraphTransformerBaseMapper.
@@ -203,6 +204,8 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
             Backend to use for graph transformer conv, options are "triton" and "pyg"
         edge_pre_mlp: bool, by default False
             Allow for edge feature mixing
+        num_layers : int, default 1
+            Number of independently parameterised graph transformer blocks.
         """
         super().__init__(
             in_channels_src=in_channels_src,
@@ -219,7 +222,11 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
 
         Linear = self.layer_factory.Linear
 
-        self.proc = GraphTransformerMapperBlock(
+        if isinstance(num_layers, bool) or not isinstance(num_layers, int) or num_layers < 1:
+            raise ValueError("num_layers must be a positive integer.")
+        self.num_layers = num_layers
+
+        block_kwargs = dict(
             in_channels=num_channels,
             hidden_dim=compute_mlp_hidden_dim(num_channels, mlp_hidden_ratio),
             out_channels=num_channels,
@@ -234,6 +241,9 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
             edge_pre_mlp=edge_pre_mlp,
         )
 
+        # Keep the first block at its historical checkpoint path, proc.*.
+        self.proc = GraphTransformerMapperBlock(**block_kwargs)
+        self.extra_procs = nn.ModuleList(GraphTransformerMapperBlock(**block_kwargs) for _ in range(num_layers - 1))
         self.offload_layers(cpu_offload)
 
         self.emb_nodes_dst = Linear(self.in_channels_dst, self.hidden_dim)
@@ -244,6 +254,20 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
             f"Invalid shard strategy '{shard_strategy}' for {self.__class__.__name__}. "
             f"Supported strategies are 'heads' and 'edges'."
         )
+
+    def offload_layers(self, cpu_offload):
+        if cpu_offload:
+            self.proc = offload_wrapper(self.proc)
+            self.extra_procs = nn.ModuleList(offload_wrapper(block) for block in self.extra_procs)
+
+    def run_mapper_blocks(self, x, edge_attr, *args, **kwargs):
+        """Refine destination features while retaining the embedded source features."""
+        source = x[0]
+        x, edge_attr = self.proc(x, edge_attr, *args, **kwargs)
+        # Older full-model checkpoints have no extra_procs attribute.
+        for block in getattr(self, "extra_procs", ()):
+            x, edge_attr = block((source, x[1]), edge_attr, *args, **kwargs)
+        return x, edge_attr
 
     def prepare_edge_sharding_wrapper(
         self,
@@ -318,7 +342,7 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
         # pre-process chunk, embedding x_src/x_dst
         x_src_chunk, x_dst_chunk = self.pre_process((x_src_chunk, x_dst_chunk))
 
-        (_, x_dst_out), _ = self.proc(
+        (_, x_dst_out), _ = self.run_mapper_blocks(
             (x_src_chunk, x_dst_chunk),
             edge_attr_chunk,
             edge_index_chunk,
@@ -423,7 +447,7 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
 
         x_src, x_dst = self.pre_process((x_src, x_dst))
 
-        (x_src, x_dst), edge_attr = self.proc(
+        (x_src, x_dst), edge_attr = self.run_mapper_blocks(
             x=(x_src, x_dst),
             edge_attr=edge_attr,
             edge_index=edge_index,
@@ -499,6 +523,7 @@ class GraphTransformerForwardMapper(GraphTransformerBaseMapper):
         shard_strategy: str = "edges",
         graph_attention_backend: str = "triton",
         edge_pre_mlp: bool = False,
+        num_layers: int = 1,
         **kwargs,
     ) -> None:
         """Initialize GraphTransformerForwardMapper.
@@ -540,6 +565,8 @@ class GraphTransformerForwardMapper(GraphTransformerBaseMapper):
             Backend to use for graph transformer conv, options are "triton" and "pyg"
         edge_pre_mlp: bool, by default False
             Allow for edge feature mixing
+        num_layers : int, default 1
+            Number of independently parameterised graph transformer blocks.
         """
         assert out_channels_dst is None, "GraphTransformerForwardMapper does not support out_channels_dst."
         super().__init__(
@@ -559,6 +586,7 @@ class GraphTransformerForwardMapper(GraphTransformerBaseMapper):
             shard_strategy=shard_strategy,
             graph_attention_backend=graph_attention_backend,
             edge_pre_mlp=edge_pre_mlp,
+            num_layers=num_layers,
             **kwargs,
         )
 
@@ -620,6 +648,7 @@ class GraphTransformerBackwardMapper(GraphTransformerBaseMapper):
         shard_strategy: str = "edges",
         graph_attention_backend: str = "triton",
         edge_pre_mlp: bool = False,
+        num_layers: int = 1,
         **kwargs,
     ) -> None:
         """Initialize GraphTransformerBackwardMapper.
@@ -664,6 +693,8 @@ class GraphTransformerBackwardMapper(GraphTransformerBaseMapper):
             Backend to use for graph transformer conv, options are "triton" and "pyg"
         edge_pre_mlp: bool, by default False
             Allow for edge feature mixing
+        num_layers : int, default 1
+            Number of independently parameterised graph transformer blocks.
         """
         super().__init__(
             in_channels_src=in_channels_src,
@@ -682,6 +713,7 @@ class GraphTransformerBackwardMapper(GraphTransformerBaseMapper):
             shard_strategy=shard_strategy,
             graph_attention_backend=graph_attention_backend,
             edge_pre_mlp=edge_pre_mlp,
+            num_layers=num_layers,
             **kwargs,
         )
 

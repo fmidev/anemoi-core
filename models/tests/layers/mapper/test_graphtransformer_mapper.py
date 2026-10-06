@@ -391,3 +391,97 @@ class TestGraphTransformerBackwardMapper(TestGraphTransformerBaseMapper):
         assert torch.allclose(
             out_heads, out_edges, atol=1e-4
         ), f"out_heads ({out_heads}) != out_edges ({out_edges}) when using different strategies"
+
+
+@pytest.mark.parametrize("mapper_class", [GraphTransformerForwardMapper, GraphTransformerBackwardMapper])
+@pytest.mark.parametrize("strategy", ["edges", "heads"])
+@pytest.mark.parametrize("checkpointing", [False, True])
+def test_multilayer_mapper_gradients_and_chunking(mapper_class, strategy, checkpointing):
+    """All blocks refine the destination, independently of memory chunking."""
+    torch.manual_seed(42)
+    is_encoder = mapper_class is GraphTransformerForwardMapper
+    mapper = mapper_class(
+        in_channels_src=5,
+        in_channels_dst=3,
+        num_channels=16,
+        out_channels_dst=None if is_encoder else 7,
+        num_chunks=1,
+        num_heads=4,
+        mlp_hidden_ratio=2,
+        edge_dim=3,
+        num_layers=3,
+        shard_strategy=strategy,
+        graph_attention_backend="pyg",
+        gradient_checkpointing=checkpointing,
+    )
+    x = (torch.randn(4, 5), torch.randn(6, 3))
+    edge_index = torch.tensor([[src, dst] for dst in range(6) for src in range(4)]).T
+    edge_attr = torch.randn(24, 3)
+    shard_info = BipartiteGraphShardInfo(src_nodes=[4], dst_nodes=[6], edges=[24])
+
+    def run():
+        output = mapper(x, 1, shard_info, edge_attr, edge_index)
+        if is_encoder:
+            assert torch.equal(output[0], x[0])
+            output = output[1]
+        assert output.shape == (6, 16 if is_encoder else 7)
+        return output
+
+    output = run()
+    output.square().mean().backward()
+    blocks = [mapper.proc, *mapper.extra_procs]
+    assert len(blocks) == 3
+    assert len({block.lin_query.weight.data_ptr() for block in blocks}) == 3
+    for block in blocks:
+        assert block.lin_query.weight.grad is not None
+        assert torch.isfinite(block.lin_query.weight.grad).all()
+        assert block.lin_query.weight.grad.abs().sum() > 0
+    mapper.num_chunks = 3
+    torch.testing.assert_close(run(), output)
+
+
+def test_single_layer_mapper_old_checkpoint_compatibility(tmp_path):
+    """Old state dictionaries and pickled models retain the single-block path."""
+    mapper = GraphTransformerForwardMapper(
+        in_channels_src=5,
+        in_channels_dst=3,
+        num_channels=16,
+        num_chunks=1,
+        num_heads=4,
+        mlp_hidden_ratio=2,
+        edge_dim=3,
+        graph_attention_backend="pyg",
+        gradient_checkpointing=False,
+    )
+    assert not any(key.startswith("extra_procs.") for key in mapper.state_dict())
+    old_state = mapper.state_dict()
+    del mapper.extra_procs
+    del mapper.num_layers
+    path = tmp_path / "old.ckpt"
+    torch.save(mapper, path)
+    restored = torch.load(path, weights_only=False)
+    restored.load_state_dict(old_state, strict=True)
+    x = (torch.randn(4, 16), torch.randn(6, 16))
+    edge_index = torch.tensor([[src, dst] for dst in range(6) for src in range(4)]).T
+    edge_attr = torch.randn(24, 3)
+    shard_info = BipartiteGraphShardInfo(src_nodes=[4], dst_nodes=[6], edges=[24])
+    args = (edge_index, shard_info, 1, (4, 6))
+    expected = restored.proc(x, edge_attr, *args)
+    actual = restored.run_mapper_blocks(x, edge_attr, *args)
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("depth", [0, -1, 1.5, True])
+def test_invalid_mapper_depth(depth):
+    with pytest.raises(ValueError, match="num_layers must be a positive integer"):
+        GraphTransformerForwardMapper(
+            in_channels_src=5,
+            in_channels_dst=3,
+            num_channels=16,
+            num_chunks=1,
+            num_heads=4,
+            mlp_hidden_ratio=2,
+            edge_dim=3,
+            graph_attention_backend="pyg",
+            num_layers=depth,
+        )
