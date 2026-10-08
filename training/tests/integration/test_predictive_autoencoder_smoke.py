@@ -161,6 +161,13 @@ def test_predictive_autoencoder_train_validation_smoke_writes_checkpoint(
             "threshold_mode": "rel",
             "min_lr": 3e-7,
         }
+        config.training.optimization.lr = 1e-3
+        config.diagnostics.callbacks = [
+            {
+                "_target_": "anemoi.training.diagnostics.callbacks.lr_warmup.LinearLearningRateWarmup",
+                "warmup_steps": 240,
+            }
+        ]
         config.training.optimization.pl_lr_scheduler.interval = "epoch"
         OmegaConf.update(
             config, "training.optimization.pl_lr_scheduler.monitor", "val_multi_dataset_loss", force_add=True
