@@ -98,6 +98,10 @@ class EnsembleTraining(BaseTrainingModule):
 
         self.nens_per_device = config.training.ensemble_size_per_device
         self.nens_per_group = self.nens_per_device * num_gpus_per_ensemble // num_gpus_per_model
+
+        # Gradient-checkpoint the loss/metric region (default). Disabling it keeps the loss
+        # intermediates for backward instead of recomputing them: faster, more memory.
+        self.checkpoint_loss = config.training.get("checkpoint_loss", True)
         LOGGER.info("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
         # lazy init ensemble group info, will be set by the DDPEnsGroupStrategy.
@@ -255,16 +259,22 @@ class EnsembleTraining(BaseTrainingModule):
 
             y = self.task.get_targets(batch, **task_step_kwargs)
 
-            loss_next, metrics_next, y_preds_next = checkpoint(
-                self.compute_loss_metrics,
-                y_pred,
-                y,
+            loss_kwargs = dict(
                 **task_step_kwargs,
                 validation_mode=validation_mode,
                 pred_layout=IndexSpace.MODEL_OUTPUT,
                 target_layout=IndexSpace.DATA_FULL,
-                use_reentrant=False,
             )
+            if self.checkpoint_loss:
+                loss_next, metrics_next, y_preds_next = checkpoint(
+                    self.compute_loss_metrics,
+                    y_pred,
+                    y,
+                    **loss_kwargs,
+                    use_reentrant=False,
+                )
+            else:
+                loss_next, metrics_next, y_preds_next = self.compute_loss_metrics(y_pred, y, **loss_kwargs)
 
             # Advance input state for each dataset if another step follows
             if i < len(task_steps) - 1:

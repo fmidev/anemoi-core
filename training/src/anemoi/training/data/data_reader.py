@@ -72,7 +72,7 @@ def _normalize_reader_config(dataset_config: dict | DictConfig) -> dict:
         msg = "Missing required 'dataset_config' in dataset reader configuration."
         raise ValueError(msg)
 
-    allowed_keys = {"start", "end", "trajectory"}
+    allowed_keys = {"start", "end", "trajectory", "segmented"}
     unknown_keys = set(normalized) - allowed_keys
     if unknown_keys:
         unknown = ", ".join(sorted(unknown_keys))
@@ -456,10 +456,136 @@ class TrajectoryDataset(BaseAnemoiReader):
         return tree
 
 
+class SegmentedNativeGridDataset(NativeGridDataset):
+    """Single valid-time sequence stitched from fixed-length forecast segments.
+
+    Some training datasets are one regular valid-time series built by stitching
+    consecutive forecast segments (e.g. MEPS lead 6-23 h / IFS lead 12-29 h, 18 steps per
+    segment). Consecutive dates across a segment boundary come from different forecasts,
+    so a sample window must not cross a boundary. Each segment is exposed as an
+    independent sequence; positions index the dates within a segment.
+
+    Segment boundaries are at ``reference_date + k * segment_length * frequency``
+    (absolute), so ``start``/``end`` subsetting cannot shift the segment phase.
+    Partial segments at the start/end of the opened period are kept as shorter sequences,
+    which reproduces the legacy ``model_run_info`` sampling exactly.
+    """
+
+    def __init__(
+        self,
+        dataset: str | dict | None = None,
+        dataset_config: str | dict | None = None,
+        start: datetime.datetime | int | None = None,
+        end: datetime.datetime | int | None = None,
+        segment_length: int | None = None,
+        reference_date: str | datetime.datetime | None = None,
+        sampling: dict | None = None,
+    ) -> None:
+        super().__init__(dataset=dataset, dataset_config=dataset_config, start=start, end=end, sampling=sampling)
+        if segment_length is None or int(segment_length) < 1:
+            msg = f"segmented.segment_length must be a positive number of steps, got {segment_length}."
+            raise ValueError(msg)
+        if reference_date is None:
+            msg = "segmented.reference_date (a date on which a segment starts) is required."
+            raise ValueError(msg)
+        self.segment_length = int(segment_length)
+        self.reference_date = np.datetime64(reference_date, "s")
+
+        dates = np.asarray(self.dates).astype("datetime64[s]")
+        step = np.timedelta64(int(self.frequency.total_seconds()), "s")
+        assert np.all(np.diff(dates) == step), "Segmented dataset requires a regular date axis."
+        steps_from_ref = (dates[0] - self.reference_date) // step
+        assert (dates[0] - self.reference_date) % step == np.timedelta64(0, "s"), (
+            f"reference_date {self.reference_date} is not on the date grid of the dataset ({dates[0]}, {step})."
+        )
+        # Number of steps from the first opened date to the first segment start (in [0, L)).
+        self.segment_offset = int(-steps_from_ref % self.segment_length)
+
+        n_dates = len(dates)
+        starts = list(range(self.segment_offset, n_dates, self.segment_length))
+        if self.segment_offset > 0:
+            starts = [0, *starts]
+        self._seq_start = np.asarray(starts, dtype=np.int64)
+        self._seq_len = np.diff(np.append(self._seq_start, n_dates)).astype(np.int64)
+        # Every full segment starts on the reference phase.
+        full = self._seq_start[self._seq_len == self.segment_length]
+        assert np.all(((dates[full] - self.reference_date) // step) % self.segment_length == 0)
+
+        missing = np.asarray(sorted(self.missing), dtype=np.int64)
+        seq_of_missing = np.searchsorted(self._seq_start, missing, side="right") - 1
+        self._missing_by_seq: dict[int, set[int]] = {}
+        for g, s in zip(missing.tolist(), seq_of_missing.tolist()):
+            self._missing_by_seq.setdefault(s, set()).add(g - int(self._seq_start[s]))
+        LOGGER.info(
+            "SegmentedNativeGridDataset: %d dates, %d sequences (segment_length=%d, offset=%d, reference=%s).",
+            n_dates,
+            self.num_sequences,
+            self.segment_length,
+            self.segment_offset,
+            self.reference_date,
+        )
+
+    @property
+    def num_sequences(self) -> int:
+        """Number of (possibly partial) forecast segments in the opened period."""
+        return len(self._seq_start)
+
+    def sequence_length(self, sequence: int = 0) -> int:
+        """Return the number of dates in ``sequence``."""
+        return int(self._seq_len[sequence])
+
+    @property
+    def missing_sequences(self) -> set[int]:
+        """Return segments with every date missing."""
+        return {s for s, pos in self._missing_by_seq.items() if len(pos) == self.sequence_length(s)}
+
+    def missing_positions(self, sequence: int = 0) -> set[int]:
+        """Return the missing positions within ``sequence``."""
+        return self._missing_by_seq.get(sequence, set())
+
+    def global_indices(self, sequence: int, positions: TimeIndices) -> TimeIndices:
+        """Map ``(sequence, positions)`` to indices on the dataset's date axis."""
+        start, length = int(self._seq_start[sequence]), self.sequence_length(sequence)
+        if isinstance(positions, slice):
+            first, stop, step = positions.indices(length)
+            assert positions.start is None or 0 <= positions.start, positions
+            assert positions.stop is None or positions.stop <= length, (positions, length)
+            return slice(start + first, start + stop, step)
+        pos = np.asarray(positions)
+        assert np.all((pos >= 0) & (pos < length)), (sequence, positions, length)
+        return (start + pos).tolist() if pos.ndim else start + int(pos)
+
+    def get_sample(
+        self,
+        sequence: int,
+        positions: TimeIndices,
+        grid_shard_indices: np.ndarray | slice | None = None,
+    ) -> torch.Tensor:
+        """Load ``positions`` of segment ``sequence``."""
+        return super().get_sample(0, self.global_indices(sequence, positions), grid_shard_indices)
+
+    def tree(self, prefix: str = "") -> Tree:
+        tree = super().tree(prefix)
+        tree.add(f"Segments: {self.num_sequences} (length {self.segment_length}, offset {self.segment_offset})")
+        tree.add(f"Sampling: {self.default_sampling}")
+        return tree
+
+
 def create_dataset(dataset_config: dict, **_kwargs) -> BaseAnemoiReader:
     """Factory function to create a data reader based on the dataset configuration."""
     dataset_config = _normalize_reader_config(dataset_config)
     trajectory_config = _as_dict(dataset_config.pop("trajectory", None))
+    segmented_config = _as_dict(dataset_config.pop("segmented", None))
+
+    if trajectory_config is not None and segmented_config is not None:
+        msg = "Use either 'trajectory' or 'segmented' in a dataset reader configuration, not both."
+        raise ValueError(msg)
+
+    if segmented_config is not None:
+        segmented_config = dict(segmented_config)
+        sampling = _as_dict(segmented_config.pop("sampling", None))
+        LOGGER.info("Creating SegmentedNativeGridDataset...")
+        return SegmentedNativeGridDataset(**dataset_config, **segmented_config, sampling=sampling)
 
     if trajectory_config is not None:
         sampling = trajectory_config.get("sampling") if isinstance(trajectory_config, dict) else None
