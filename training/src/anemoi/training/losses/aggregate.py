@@ -39,9 +39,19 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
         time_aggregation_types: list[str],
         loss_fn: BaseLoss,
         ignore_nans: bool = False,
+        stack_aggregates: bool = False,
     ) -> None:
+        """Parameters
+        ----------
+        stack_aggregates : bool, optional
+            Concatenate all aggregated fields along the time dimension and call the wrapped loss
+            once (the wrapped loss sums over time). Identical result when no time scaler is
+            present, with one instead of ``n_aggregates`` calls (relevant for spectral losses,
+            which transpose and transform per call). By default ``False``.
+        """
         super().__init__(loss=loss_fn, ignore_nans=ignore_nans)
         self.time_aggregation_types = time_aggregation_types
+        self.stack_aggregates = stack_aggregates
 
     def forward(
         self,
@@ -113,14 +123,30 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
         if squash_mode is not None:
             shared_kwargs["squash_mode"] = squash_mode
 
-        for agg_op in self.time_aggregation_types:
-            loss = loss + self._compute_agg_loss(agg_op, pred, target, time_weights, shared_kwargs)
+        if self.stack_aggregates and time_weights is None:
+            preds, targets = zip(*(self._aggregate(agg_op, pred, target) for agg_op in self.time_aggregation_types))
+            loss = self.loss(torch.cat(preds, dim=1), torch.cat(targets, dim=1), **shared_kwargs)
+        else:
+            for agg_op in self.time_aggregation_types:
+                loss = loss + self._compute_agg_loss(agg_op, pred, target, time_weights, shared_kwargs)
 
         # Average over the number of aggregation types, matching the old per-term
         # normalisation (old code: loss /= num_interp_steps + num_aggregate_ops).
         if self.time_aggregation_types:
             loss = loss / len(self.time_aggregation_types)
         return loss
+
+    @staticmethod
+    def _aggregate(agg_op: str, pred: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Aggregated (pred, target) along time, keeping a time dimension (size 1, or T-1 for diff)."""
+        if agg_op == "diff":
+            return pred[:, 1:] - pred[:, :-1], target[:, 1:] - target[:, :-1]
+        agg_fns = {"mean": torch.mean, "min": torch.amin, "max": torch.amax}
+        if agg_op not in agg_fns:
+            msg = f"Unknown aggregation type '{agg_op}'. Supported: 'diff', 'mean', 'min', 'max'."
+            raise ValueError(msg)
+        fn = agg_fns[agg_op]
+        return fn(pred, dim=1, keepdim=True), fn(target, dim=1, keepdim=True)
 
     def _compute_agg_loss(
         self,

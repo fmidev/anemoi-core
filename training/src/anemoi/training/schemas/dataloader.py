@@ -113,6 +113,24 @@ class TrajectoryDatasetSchema(NativeDatasetSchema):
     "Trajectory configuration."
 
 
+class SegmentedSchema(PydanticBaseModel):
+    """Stitched-segment reader configuration (one valid-time series built from fixed-length forecast segments)."""
+
+    segment_length: PositiveInt
+    "Number of dataset steps per forecast segment (e.g. 18 for 18 hourly lead times)."
+    reference_date: str
+    "Any valid date on which a segment starts; boundaries are reference_date + k * segment_length steps."
+    sampling: TrajectorySamplingSchema | None = Field(default=None)
+    "Anchor sampling config within segments. Default stride=1 (every valid position)."
+
+
+class SegmentedDatasetSchema(NativeDatasetSchema):
+    """Dataset configuration schema for stitched-segment datasets."""
+
+    segmented: SegmentedSchema | None = Field(default=None)
+    "Segment configuration."
+
+
 class LoaderSet(BaseModel):
     training: NonNegativeInt | None = Field(example=None)
     "Value for training dataset"
@@ -140,11 +158,11 @@ class DataLoaderSchema(PydanticBaseModel):
     "Per-GPU batch size."
     limit_batches: LoaderSet = Field(example=None)
     "Limit number of batches to run. Default value null, will run on all the batches."
-    training: DatasetDict[NativeDatasetSchema | TrajectoryDatasetSchema]
+    training: DatasetDict[NativeDatasetSchema | TrajectoryDatasetSchema | SegmentedDatasetSchema]
     "Training DatasetSchema."
-    validation: DatasetDict[NativeDatasetSchema | TrajectoryDatasetSchema]
+    validation: DatasetDict[NativeDatasetSchema | TrajectoryDatasetSchema | SegmentedDatasetSchema]
     "Validation DatasetSchema."
-    test: DatasetDict[NativeDatasetSchema | TrajectoryDatasetSchema]
+    test: DatasetDict[NativeDatasetSchema | TrajectoryDatasetSchema | SegmentedDatasetSchema]
     "Test DatasetSchema."
     read_group_size: PositiveInt = Field(example=None)
     "Number of GPUs per reader group. Defaults to number of GPUs (see BaseSchema validators)."
