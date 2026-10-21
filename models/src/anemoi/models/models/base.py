@@ -82,6 +82,15 @@ class BaseGraphModel(nn.Module):
         else:
             self.residuals_to_skip = []
 
+        # Datasets whose encoder output is kept OUT of the shared latent sum. Their
+        # encoder still runs, but its hidden-side output reaches only that dataset's
+        # own decoder, so a frozen trunk is provably unaffected by it.
+        if "encoder" in model_config.model and "side_channel" in model_config.model.encoder:
+            self.side_channel_encoders = list(model_config.model.encoder.side_channel)
+        else:
+            self.side_channel_encoders = []
+        self._assert_valid_side_channel_encoders()
+
         self.num_channels = model_config.model.num_channels
         self.latent_skip = model_config.model.model.latent_skip
 
@@ -160,6 +169,23 @@ class BaseGraphModel(nn.Module):
         raise TypeError(
             f"Hidden nodes name must be a string or a list of strings, got {type(hidden_nodes_name)}",
         )
+
+    def _assert_valid_side_channel_encoders(self) -> None:
+        """A side-channel encoder must exist, and something must still feed the processor."""
+        unknown = [name for name in self.side_channel_encoders if name not in self.dataset_names]
+        assert not unknown, f"encoder.side_channel names unknown datasets {unknown}, known: {self.dataset_names}"
+
+        skipped = [name for name in self.side_channel_encoders if name in self.encoders_to_skip]
+        assert not skipped, f"datasets {skipped} are in both encoder.skip and encoder.side_channel"
+
+        trunk = [
+            name
+            for name in self.dataset_names
+            if name not in self.encoders_to_skip and name not in self.side_channel_encoders
+        ]
+        assert (
+            trunk or not self.side_channel_encoders
+        ), "every encoder is a side channel: nothing would feed the processor"
 
     def _assert_hidden_nodes_name(self, hidden_nodes_name: str) -> None:
         for hidden_name in self._as_hidden_node_names(hidden_nodes_name):

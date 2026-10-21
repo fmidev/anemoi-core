@@ -201,9 +201,18 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         for dataset_name in dataset_names:
             self._assert_valid_sharding(batch_size, ensemble_size, in_out_sharded[dataset_name], model_comm_group)
 
+        # getattr, not self.side_channel_encoders: inference unpickles a saved model
+        # object from a checkpoint rather than constructing one via __init__, so a
+        # checkpoint written before this attribute existed has no
+        # `side_channel_encoders` in its restored __dict__ at all. Falling back to
+        # `[]` (never containing any dataset name) makes that case take the exact
+        # code path forward() took before this option existed.
+        side_channel_encoders = getattr(self, "side_channel_encoders", None) or []
+
         fcstep = min(1, fcstep)
         # Process each dataset through its corresponding encoder
         dataset_latents = {}
+        side_channel_latents = {}
         x_skip_dict = {}
         x_data_latent_dict = {}
         shard_sizes_data_dict = {}
@@ -249,10 +258,13 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                     model_comm_group=model_comm_group,
                     keep_x_dst_sharded=True,  # always keep x_latent sharded for the processor
                 )
-                dataset_latents[dataset_name] = x_latent
+                if dataset_name in side_channel_encoders:
+                    side_channel_latents[dataset_name] = x_latent
+                else:
+                    dataset_latents[dataset_name] = x_latent
             x_data_latent_dict[dataset_name] = x_data_latent
 
-        # Combine all dataset latents
+        # Combine all dataset latents (side-channel encoders deliberately excluded)
         x_latent = sum(dataset_latents.values())
 
         x_latent_proc, latent_noise = self.noise_injector(
@@ -306,8 +318,14 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 edges=dec_edge_shard_sizes,
             )
 
+            # A side-channel encoder reaches only its own decoder: the sum above, and
+            # hence everything the processor sees, is untouched by it.
+            x_latent_dec = x_latent_proc
+            if dataset_name in side_channel_latents:
+                x_latent_dec = x_latent_proc + side_channel_latents[dataset_name]
+
             x_out = self.decoder[dataset_name](
-                (x_latent_proc, x_data_latent_dict[dataset_name]),
+                (x_latent_dec, x_data_latent_dict[dataset_name]),
                 batch_size=batch_ens_size,
                 shard_info=dec_shard_info,
                 edge_attr=decoder_edge_attr,

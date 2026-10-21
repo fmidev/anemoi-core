@@ -309,6 +309,63 @@ class LeakyFractionBounding(FractionBounding):
         return x
 
 
+class SoftmaxBounding(BaseBounding):
+    """Turns the outputs of one categorical variable's classes into a probability distribution.
+
+    ``variables`` are the per-class outputs of ONE categorical variable (one-hot classes,
+    for instance precipitation form). A softmax over them makes the prediction
+    non-negative and sum to one, so a prognostic categorical variable feeds back a
+    distribution of the same kind as its one-hot training inputs rather than unbounded
+    logits.
+
+    The bounding acts in the model's normalised space, so pair it with the ``none``
+    normaliser for these variables; otherwise the fed-back values are probabilities in
+    normalised units. Train them with ``MixtureCrossEntropyLoss(inputs="probabilities")``,
+    which reads these values as probabilities instead of applying a second softmax.
+
+    For a prognostic variable the residual connection has already been added, so the
+    softmax is taken over the previous distribution plus the decoder's increment. With
+    zero-initialised output rows it starts at ``softmax(previous)``: the same most likely
+    class, with the certainty softened.
+
+    Every dataset receives every configured bounding; a dataset that has none of the
+    classes is left alone, one that has only some of them is refused (a softmax over a
+    partial group would silently be a different distribution).
+    """
+
+    def __init__(
+        self,
+        *,
+        variables: list[str],
+        name_to_index: dict,
+        statistics: Optional[dict] = None,
+        name_to_index_stats: Optional[dict] = None,
+    ) -> None:
+        if len(variables) < 2:
+            msg = f"SoftmaxBounding needs at least two class variables, got {variables}"
+            raise ValueError(msg)
+        super().__init__(
+            variables=variables,
+            name_to_index=name_to_index,
+            statistics=statistics,
+            name_to_index_stats=name_to_index_stats,
+        )
+        present = [name for name in variables if name in name_to_index]
+        if present and len(present) != len(variables):
+            missing = [name for name in variables if name not in name_to_index]
+            msg = (
+                f"SoftmaxBounding: only some classes are model outputs ({present}); missing {missing}. "
+                "All classes of the categorical variable must be outputs of the same dataset."
+            )
+            raise ValueError(msg)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.data_index.numel() == 0:
+            return x
+        x[..., self.data_index] = torch.softmax(x[..., self.data_index], dim=-1)
+        return x
+
+
 def _build_dataset_boundings(
     model_config: Any,
     data_indices: Any,

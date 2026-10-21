@@ -220,6 +220,13 @@ class NormalizedLeakyReluBoundingSchema(NormalizedReluBoundingSchema):
     "Leaky normalized Relu bounding object defined in anemoi.models.layers.bounding."
 
 
+class SoftmaxBoundingSchema(BaseModel):
+    target_: Literal["anemoi.models.layers.bounding.SoftmaxBounding"] = Field(..., alias="_target_")
+    "Softmax bounding object defined in anemoi.models.layers.bounding."
+    variables: list[str] = Field(min_length=2)
+    "The per-class outputs of ONE categorical variable; a softmax over them gives a probability distribution."
+
+
 Bounding = Annotated[
     Union[
         ReluBoundingSchema,
@@ -230,6 +237,7 @@ Bounding = Annotated[
         LeakyHardtanhBoundingSchema,
         NormalizedReluBoundingSchema,
         NormalizedLeakyReluBoundingSchema,
+        SoftmaxBoundingSchema,
     ],
     Field(discriminator="target_"),
 ]

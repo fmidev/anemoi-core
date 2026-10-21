@@ -155,6 +155,17 @@ class FFT2D(SpectralTransform):
         data = self.prepare_for_fft(data)
 
         if self.patch_size is None:
+            if data.numel() == 0:
+                # A rank can hold zero variables: sharded spectral losses split the
+                # variables across the model group, so a 1-variable dataset leaves the
+                # other rank empty, and hipFFT fails on an empty batch
+                # (HIPFFT_EXEC_FAILED). Return the empty spectrum instead, still attached
+                # to the graph: the reshard after the loss is a collective, and every rank
+                # must take part in its backward too.
+                empty = torch.zeros(
+                    data.shape, dtype=torch.promote_types(data.dtype, torch.complex64), device=data.device
+                )
+                return empty + data.sum() * 0
             fft = torch.fft.fft2(data, dim=(-2, -3))
             if self.apply_filter:
                 fft *= self.filter.to(device=data.device, dtype=data.dtype)
