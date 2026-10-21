@@ -14,6 +14,8 @@ update_ds_stats_on_ckpt_load:
   tendencies: True # rebuild tendency processors from current dataset when loading a checkpoint
 
 transfer_learning: False # activate to perform transfer learning
+# with transfer_learning: keep trained weights of shared variables by name when the variable set changed
+transfer_learning_remap_variables: False
 
 # Options forwarded to Variable.check_compatibility when checking checkpoint vs. current
 # dataset (fine-tuning / transfer learning). Set ignore_units/ignore_processing_period to True to

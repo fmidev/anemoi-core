@@ -161,10 +161,15 @@ class Forecaster(BaseTask):
         data_indices: IndexCollection | None = None,
         output_mask: object | None = None,
         grid_shard_slice: slice | None = None,
+        imputed_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Advance a single dataset's input state for the next rollout step.
 
         Supports model outputs shaped like ``(B, T, E, G, V)``.
+
+        ``imputed_mask`` (batch, grid, model-input variable), if given, marks inputs the
+        pre-processor imputed; they are restored from the (imputed) batch instead of taking
+        the prediction, as happens at inference. See ``utils.rollout_imputation``.
         """
         keep_steps = min(self.num_input_steps, self.num_output_steps)
 
@@ -195,6 +200,10 @@ class Forecaster(BaseTask):
                 grid_shard_slice=grid_shard_slice,
             )
 
+            if imputed_mask is not None:
+                fill = true_state[..., data_indices.data.input.full].to(x.dtype)  # (B, E|1, G, V_in)
+                x[:, -(i + 1)] = torch.where(imputed_mask.unsqueeze(1), fill, x[:, -(i + 1)])
+
             # get new "constants" needed for time-varying fields
             x[:, -(i + 1), ..., data_indices.model.input.forcing] = batch[
                 :,
@@ -213,6 +222,7 @@ class Forecaster(BaseTask):
         data_indices: dict[str, IndexCollection] | None = None,
         output_mask: dict[str, object] | None = None,
         grid_shard_slice: dict[str, slice | None] | None = None,
+        imputed_mask: dict[str, torch.Tensor | None] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Advance the input state for the next rollout step."""
         for dataset_name in x:
@@ -224,6 +234,7 @@ class Forecaster(BaseTask):
                 data_indices=data_indices[dataset_name],
                 output_mask=None if output_mask is None else output_mask[dataset_name],
                 grid_shard_slice=None if grid_shard_slice is None else grid_shard_slice[dataset_name],
+                imputed_mask=None if imputed_mask is None else imputed_mask.get(dataset_name),
             )
         return x
 

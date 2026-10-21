@@ -9,6 +9,7 @@
 
 
 import logging
+from collections.abc import Collection
 from functools import lru_cache
 
 from omegaconf import DictConfig
@@ -38,6 +39,7 @@ def extract_variables_metadata_from_checkpoint(
 def check_variables_metadata_compatibility(
     ckpt_variables_metadata: dict[str, dict] | None,
     dataset_metadata: dict[str, dict],
+    shared_only_datasets: Collection[str] = (),
     **options: object,
 ) -> None:
     """Check unit compatibility between checkpoint and dataset variables_metadata.
@@ -54,6 +56,9 @@ def check_variables_metadata_compatibility(
     dataset_metadata : dict[str, dict]
         Per-dataset metadata from the current datamodule. Each entry is expected to have
         a ``"variables_metadata"`` key.
+    shared_only_datasets : Collection[str]
+        Datasets whose variable set is allowed to differ (their weights were remapped by
+        variable name). Only the variables they share are compared.
     **options : object
         Additional keyword arguments forwarded to ``Variable.check_compatibility``
         (e.g. ``ignore_units``, ``ignore_processing_period``).
@@ -85,6 +90,18 @@ def check_variables_metadata_compatibility(
                 dataset_name,
             )
             continue
+
+        if dataset_name in shared_only_datasets:
+            shared = set(ckpt_var_meta) & set(ds_var_meta)
+            LOG.info(
+                "Dataset '%s': comparing units of the %d shared variables only (added %s, removed %s).",
+                dataset_name,
+                len(shared),
+                sorted(set(ds_var_meta) - shared),
+                sorted(set(ckpt_var_meta) - shared),
+            )
+            ckpt_var_meta = {name: data for name, data in ckpt_var_meta.items() if name in shared}
+            ds_var_meta = {name: data for name, data in ds_var_meta.items() if name in shared}
 
         ckpt_vars = {name: Variable.from_dict(name, data) for name, data in ckpt_var_meta.items()}
         ds_vars = {name: Variable.from_dict(name, data) for name, data in ds_var_meta.items()}

@@ -41,6 +41,7 @@ from anemoi.training.losses.scalers import create_scalers
 from anemoi.training.losses.scalers.base_scaler import AvailableCallbacks
 from anemoi.training.losses.scalers.base_scaler import BaseScaler
 from anemoi.training.losses.utils import check_loss_tree_variable_units
+from anemoi.training.utils.rollout_imputation import imputed_input_mask
 from anemoi.training.losses.utils import print_variable_scaling
 from anemoi.training.utils.enums import TensorDim
 from anemoi.training.utils.variables_metadata import ExtractVariableGroupAndLevel
@@ -434,6 +435,28 @@ class BaseTrainingModule(pl.LightningModule, ABC):
             grid_shard_sizes=self.grid_shard_sizes,
             **kwargs,
         )
+
+    def _rollout_imputed_masks(self) -> dict[str, torch.Tensor | None] | None:
+        """Per-dataset masks of imputed inputs, for training.reimpute_rollout_inputs.
+
+        Read after the batch has been pre-processed, from the imputers' recorded NaN
+        locations. None when the option is off, which leaves the rollout unchanged.
+        """
+        if not getattr(self.config.training, "reimpute_rollout_inputs", False):
+            return None
+        cache = getattr(self, "_rollout_imputed_mask_cache", {})
+        masks = {name: cache.get(name) for name in self.dataset_names}
+        if not getattr(self, "_logged_rollout_imputed_masks", False):
+            self._logged_rollout_imputed_masks = True
+            for name, mask in masks.items():
+                LOGGER.info(
+                    "reimpute_rollout_inputs rank %s: dataset %r, %s imputed input positions per sample (of %s)",
+                    self.global_rank,
+                    name,
+                    "no" if mask is None else int(mask[0].sum()),
+                    "-" if mask is None else mask[0].numel(),
+                )
+        return masks
 
     def _update_checkpoint_state_dict_for_load(self, checkpoint: dict[str, Any]) -> None:
         update_cfg = self.config.training.update_ds_stats_on_ckpt_load
@@ -902,8 +925,17 @@ class BaseTrainingModule(pl.LightningModule, ABC):
             Normalized batch
         """
         assert isinstance(batch, dict), "batch must be a dict keyed by dataset name"
+        reimpute = getattr(self.config.training, "reimpute_rollout_inputs", False)
+        self._rollout_imputed_mask_cache = {}
         for dataset_name in batch:
             batch[dataset_name] = self.model.pre_processors[dataset_name](batch[dataset_name])  # normalized in-place
+            if reimpute:
+                # Read now, right after the imputers recorded this batch's NaN locations, rather than
+                # later in the step: those locations are module buffers, and with a model sharded over
+                # GPUs DDP's broadcast_buffers would replace them with rank 0's before the step runs.
+                self._rollout_imputed_mask_cache[dataset_name] = imputed_input_mask(
+                    self.model.pre_processors[dataset_name],
+                )
         return batch
 
     def _prepare_loss_scalers(self) -> None:

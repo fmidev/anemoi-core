@@ -38,7 +38,15 @@ class MixtureCrossEntropyLoss(BaseLoss):
         L = -sum_c q(c) * log p_ens(c)
 
     where q(c) is the target distribution (one-hot or soft labels).
+
+    The predictions are logits by default. With ``inputs="probabilities"`` they are read
+    as per-class probabilities, as produced by ``SoftmaxBounding`` for a prognostic
+    categorical variable, and their log is taken directly instead of a second softmax.
+    Through that bounding the gradient with respect to the logits is the same as in the
+    default mode.
     """
+
+    INPUTS = ("logits", "probabilities")
 
     def __init__(
         self,
@@ -47,6 +55,7 @@ class MixtureCrossEntropyLoss(BaseLoss):
         class_weights: list[float] | None = None,
         no_autocast: bool = True,
         ignore_nans: bool = False,
+        inputs: str = "logits",
         **kwargs,
     ) -> None:
         """Ensemble mixture cross-entropy loss.
@@ -67,8 +76,16 @@ class MixtureCrossEntropyLoss(BaseLoss):
             If None, all classes are weighted equally. By default None.
         ignore_nans : bool, optional
             Allow NaNs in the loss and use nan-safe reduction functions, by default False
+        inputs : str, optional
+            What the predictions are: "logits" (default) or "probabilities" (already a
+            distribution over the classes, e.g. from ``SoftmaxBounding``).
         """
         super().__init__(ignore_nans=ignore_nans, **kwargs)
+
+        if inputs not in self.INPUTS:
+            msg = f"MixtureCrossEntropyLoss: inputs must be one of {self.INPUTS}, got {inputs!r}"
+            raise ValueError(msg)
+        self.inputs = inputs
 
         self.num_classes = num_classes
         self.label_smoothing = label_smoothing
@@ -87,8 +104,12 @@ class MixtureCrossEntropyLoss(BaseLoss):
     ) -> torch.Tensor:
         y_pred_f = y_pred.float()
 
-        # From logits to log-probabilities per ensemble member: (bs, t, ens, grid, C)
-        log_probs = functional.log_softmax(y_pred_f, dim=-1)
+        # Log-probabilities per ensemble member: (bs, t, ens, grid, C)
+        if self.inputs == "probabilities":
+            # clamp only guards log(0); it is inactive for any probability float32 can hold
+            log_probs = torch.log(y_pred_f.clamp_min(torch.finfo(y_pred_f.dtype).tiny))
+        else:
+            log_probs = functional.log_softmax(y_pred_f, dim=-1)
 
         # Mixture log-probability via logsumexp over ensemble dim: (bs, t, grid, C)
         log_p_ens = torch.logsumexp(log_probs, dim=TensorDim.ENSEMBLE_DIM) - math.log(ens_size)
@@ -115,6 +136,24 @@ class MixtureCrossEntropyLoss(BaseLoss):
         # y_target: (bs, t, grid, C)   — single ground truth, no ensemble dim
         y_target = einops.rearrange(y_target, "bs t 1 latlon v -> bs t latlon v")
         ens_size = y_pred.shape[TensorDim.ENSEMBLE_DIM]
+
+        if self.ignore_nans:
+            # Post-processing puts NaN back where the imputer filled (e.g. outside a limited
+            # area). Zero targets make those points contribute exactly nothing; the prediction
+            # is filled BEFORE the log so the gradient stays finite as well.
+            missing = torch.isnan(y_target).any(dim=-1) | torch.isnan(y_pred).any(dim=-1).any(
+                dim=TensorDim.ENSEMBLE_DIM,
+            )
+            y_target = y_target.masked_fill(missing.unsqueeze(-1), 0.0)
+            fill = 1.0 / self.num_classes if self.inputs == "probabilities" else 0.0
+            y_pred = y_pred.masked_fill(missing.unsqueeze(TensorDim.ENSEMBLE_DIM).unsqueeze(-1), fill)
+
+        if scaler_indices is not None and len(scaler_indices) > 0:
+            # The class axis is collapsed to ONE categorical variable below, so a selection of
+            # any of its classes (validation metrics pass each variable group's indices) means
+            # that variable; indexing the size-1 axis with class positions would read out of
+            # bounds. An empty selection never gets here: LossVariableMapper returns zeros.
+            scaler_indices = (*scaler_indices[:-1], torch.zeros(1, dtype=torch.long, device=y_pred.device))
 
         # Apply label smoothing to target distribution
         if self.label_smoothing > 0.0:

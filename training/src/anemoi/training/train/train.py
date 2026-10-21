@@ -283,6 +283,7 @@ class AnemoiTrainer(ABC):
         """
         loaded_datasets = []
         initialized_datasets = []
+        remapped_datasets = getattr(model, "_remapped_variable_datasets", set())
 
         # Check if checkpoint has multi-dataset format
         if not isinstance(model._ckpt_model_name_to_index, dict):
@@ -293,7 +294,15 @@ class AnemoiTrainer(ABC):
             if dataset_name in model._ckpt_model_name_to_index:
                 # Dataset found in checkpoint - validate variables match
                 ckpt_name_to_index = model._ckpt_model_name_to_index[dataset_name]
-                data_indices.compare_variables(ckpt_name_to_index, data_indices.name_to_index)
+                if dataset_name in remapped_datasets:
+                    # the weights were already moved by variable name, so a changed order is expected
+                    LOGGER.info(
+                        "Dataset '%s': variables remapped by name (transfer_learning_remap_variables); "
+                        "skipping the variable-order check.",
+                        dataset_name,
+                    )
+                else:
+                    data_indices.compare_variables(ckpt_name_to_index, data_indices.name_to_index)
                 loaded_datasets.append(dataset_name)
             else:
                 # Dataset not found in checkpoint - will be randomly initialized
@@ -347,7 +356,12 @@ class AnemoiTrainer(ABC):
         compat_options = (
             OmegaConf.to_container(compat_cfg, resolve=True) if OmegaConf.is_config(compat_cfg) else (compat_cfg or {})
         )
-        check_variables_metadata_compatibility(ckpt_variables_metadata, self.datamodule.metadata, **compat_options)
+        check_variables_metadata_compatibility(
+            ckpt_variables_metadata,
+            self.datamodule.metadata,
+            shared_only_datasets=getattr(model, "_remapped_variable_datasets", set()),
+            **compat_options,
+        )
 
     @cached_property
     def model(self) -> pl.LightningModule:

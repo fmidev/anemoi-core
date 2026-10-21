@@ -241,6 +241,7 @@ class EnsembleTraining(BaseTrainingModule):
 
         x = self.task.get_inputs(batch, data_indices=self.data_indices)
         x = self._expand_ens_dim(x)
+        imputed_masks = self._rollout_imputed_masks()
 
         task_steps = self.task.steps("training" if not validation_mode else "validation")
         for task_step_kwargs in task_steps:
@@ -264,6 +265,7 @@ class EnsembleTraining(BaseTrainingModule):
                 x,
                 y_pred,
                 batch,
+                imputed_mask=imputed_masks,
                 **task_step_kwargs,
                 data_indices=self.data_indices,
                 output_mask=self.output_mask,

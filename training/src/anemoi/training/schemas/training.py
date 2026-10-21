@@ -402,6 +402,8 @@ class MixtureCrossEntropyLossSchema(BaseLossSchema):
     """Optional class weights."""
     no_autocast: bool = True
     "Deactivate autocast for the mixture cross entropy loss calculation"
+    inputs: Literal["logits", "probabilities"] = "logits"
+    "What the predictions are: logits (default), or probabilities already produced by SoftmaxBounding."
 
     @model_validator(mode="after")
     def check_subgrid_transform(self) -> Self:
@@ -665,6 +667,11 @@ class BaseDDPStrategySchema(BaseModel):
     "Number of GPUs per reader group. Defaults to number of GPUs."
     use_local_synchronization: bool = Field(default=True, example=True)
     "Use synchronization local to the group when creating process groups."
+    broadcast_buffers: bool = Field(default=True, example=False)
+    "Passed to torch DistributedDataParallel: broadcast module buffers from rank 0 at every forward."
+    " Set False when a model is sharded over GPUs (num_gpus_per_model > 1): buffers that differ per"
+    " grid shard - e.g. an imputer's NaN locations and its loss mask - are otherwise overwritten with"
+    " rank 0's."
 
 
 class DDPEnsGroupStrategyStrategySchema(BaseDDPStrategySchema):
@@ -699,6 +706,16 @@ class BaseTrainingSchema(BaseModel):
     "Load only the weights from the checkpoint, not the optimiser state."
     transfer_learning: bool = Field(example=False)
     "Flag to activate transfer learning mode when loading a checkpoint."
+    reimpute_rollout_inputs: bool = Field(default=False)
+    "Keep imputed inputs imputed through the training rollout: where the pre-processor filled a NaN"
+    " input (e.g. a variable that exists only over a limited area), each rollout step gets the fill"
+    " value again - as at inference - instead of the model's own prediction there."
+    transfer_learning_remap_variables: bool = Field(default=False)
+    "With transfer_learning, when a dataset's variables differ from the checkpoint's, carry the variable-indexed"
+    " weights (input embeddings, output layer, normaliser statistics) over by variable name and zero-initialise"
+    " the slots of new variables, instead of re-initialising those layers. The warm-started model then reproduces"
+    " the checkpoint for the shared variables. The variable-order and units checks are relaxed accordingly for"
+    " those datasets (units are still compared for the shared variables)."
     check_variables_compatibility: CheckVariablesCompatibilitySchema = Field(
         default_factory=CheckVariablesCompatibilitySchema,
     )
@@ -723,8 +740,8 @@ class BaseTrainingSchema(BaseModel):
     "Config for gradient clipping."
     strategy: StrategySchemas
     "Strategy to use."
-    training_loss: DatasetDict[LossSchemas]
-    "Training loss configuration."
+    training_loss: DatasetDict[LossSchemas | None]
+    "Training loss configuration. A dataset entry set to null is excluded from loss and metric computation."
     weight_averaging: WeightAveragingSchema | None = Field(default=None)
     "Config for weight averaging (SWA or EMA). Set to null to disable."
     loss_gradient_scaling: bool = False

@@ -8,6 +8,8 @@ defaults:
 run_id: null
 fork_run_id: null
 transfer_learning: False
+# with transfer_learning: keep trained weights of shared variables by name when the variable set changed
+transfer_learning_remap_variables: False
 load_weights_only: False
 update_ds_stats_on_ckpt_load:
   states: False

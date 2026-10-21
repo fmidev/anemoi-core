@@ -17,8 +17,19 @@ from anemoi.training.utils.variables_metadata import check_variables_metadata_co
 LOGGER = logging.getLogger(__name__)
 
 
+def _remapped_datasets(pl_module: pl.LightningModule) -> set:
+    """Datasets whose weights transfer_learning_remap_variables moved by variable name."""
+    remapped = getattr(pl_module, "_remapped_variable_datasets", None)
+    return set(remapped) if isinstance(remapped, (set, frozenset, list, tuple)) else set()
+
+
 class CheckVariableOrder(pl.callbacks.Callback):
-    """Check the order of the variables in a pre-trained / fine-tuning model."""
+    """Check the order of the variables in a pre-trained / fine-tuning model.
+
+    For a dataset whose weights were remapped by variable name (transfer_learning_remap_variables),
+    the checkpoint's order no longer describes the model - the new configuration's does - so the
+    data is checked against the NEW layout instead, and units are compared on shared variables.
+    """
 
     def _get_model_name_to_index(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         """Get the model name to index mapping, handling both checkpoint and data indices."""
@@ -31,11 +42,21 @@ class CheckVariableOrder(pl.callbacks.Callback):
             return model_name_to_index
         return trainer.datamodule.data_indices.name_to_index
 
-    def _compare_variables(self, trainer: pl.Trainer, model_name_to_index: dict, data_name_to_index: dict) -> None:  # type: ignore[misc]
+    def _compare_variables(
+        self,
+        trainer: pl.Trainer,
+        model_name_to_index: dict,
+        data_name_to_index: dict,
+        remapped: set | None = None,
+    ) -> None:  # type: ignore[misc]
         """Compare variables between model and data indices."""
+        remapped = remapped or set()
         for dataset_name, data_indices in trainer.datamodule.data_indices.items():
+            if dataset_name in remapped and dataset_name in data_name_to_index:
+                # the model now has the new configuration's layout
+                data_indices.compare_variables(data_indices.name_to_index, data_name_to_index[dataset_name])
             # Only compare if dataset exists in model (handles transfer learning scenarios)
-            if dataset_name in model_name_to_index and dataset_name in data_name_to_index:
+            elif dataset_name in model_name_to_index and dataset_name in data_name_to_index:
                 data_indices.compare_variables(model_name_to_index[dataset_name], data_name_to_index[dataset_name])
             else:
                 LOGGER.debug(
@@ -55,7 +76,7 @@ class CheckVariableOrder(pl.callbacks.Callback):
         """
         data_name_to_index = trainer.datamodule.ds_train.name_to_index
         self._model_name_to_index = self._get_model_name_to_index(trainer, pl_module)
-        self._compare_variables(trainer, self._model_name_to_index, data_name_to_index)
+        self._compare_variables(trainer, self._model_name_to_index, data_name_to_index, _remapped_datasets(pl_module))
         self._check_variable_units(trainer, pl_module)
 
     @staticmethod
@@ -72,7 +93,12 @@ class CheckVariableOrder(pl.callbacks.Callback):
         compat_options = (
             OmegaConf.to_container(compat_cfg, resolve=True) if OmegaConf.is_config(compat_cfg) else (compat_cfg or {})
         )
-        check_variables_metadata_compatibility(ckpt_variables_metadata, trainer.datamodule.metadata, **compat_options)
+        check_variables_metadata_compatibility(
+            ckpt_variables_metadata,
+            trainer.datamodule.metadata,
+            shared_only_datasets=_remapped_datasets(pl_module),
+            **compat_options,
+        )
 
     def on_validation_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         """Check the order of the variables in the model from checkpoint and the validation data.
@@ -86,7 +112,7 @@ class CheckVariableOrder(pl.callbacks.Callback):
         """
         data_name_to_index = trainer.datamodule.ds_valid.name_to_index
         self._model_name_to_index = self._get_model_name_to_index(trainer, pl_module)
-        self._compare_variables(trainer, self._model_name_to_index, data_name_to_index)
+        self._compare_variables(trainer, self._model_name_to_index, data_name_to_index, _remapped_datasets(pl_module))
 
     def on_test_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         """Check the order of the variables in the model from checkpoint and the test data.
@@ -100,4 +126,4 @@ class CheckVariableOrder(pl.callbacks.Callback):
         """
         data_name_to_index = trainer.datamodule.ds_test.name_to_index
         self._model_name_to_index = self._get_model_name_to_index(trainer, pl_module)
-        self._compare_variables(trainer, self._model_name_to_index, data_name_to_index)
+        self._compare_variables(trainer, self._model_name_to_index, data_name_to_index, _remapped_datasets(pl_module))

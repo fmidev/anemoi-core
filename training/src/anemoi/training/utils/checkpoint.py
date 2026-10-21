@@ -23,6 +23,7 @@ from pytorch_lightning import Trainer
 
 from anemoi.models.migrations import Migrator
 from anemoi.training.train.methods.base import BaseTrainingModule
+from anemoi.training.utils.variable_remap import remap_variable_tensors
 from anemoi.training.utils.variables_metadata import extract_variables_metadata_from_checkpoint
 from anemoi.utils.checkpoints import save_metadata
 
@@ -96,6 +97,12 @@ def save_inference_checkpoint(model: torch.nn.Module, metadata: dict, save_path:
     return inference_filepath
 
 
+def _remap_variables_enabled(model: torch.nn.Module) -> bool:
+    """Whether ``training.transfer_learning_remap_variables`` is set (absent means off)."""
+    training = getattr(getattr(model, "config", None), "training", None)
+    return bool(getattr(training, "transfer_learning_remap_variables", False)) if training is not None else False
+
+
 def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> nn.Module:
     # Load the checkpoint
     # Load to CPU explictly, to avoid loading entire model on GPU initially
@@ -107,6 +114,14 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
     # apply chunking migration (fails silently otherwise leading to hard to debug issues)
     # this is due to loading with strict=False, planning to make this more robust in the future
     checkpoint = chunking_fix_migration(checkpoint)
+
+    # Carry variable-indexed weights over by name if the variable set changed. Before the
+    # stats refresh below, so a configured refresh still overwrites the processor buffers.
+    model._remapped_variable_datasets = set()
+    ckpt_data_indices = checkpoint["hyper_parameters"]["data_indices"]
+    if _remap_variables_enabled(model) and isinstance(ckpt_data_indices, dict):
+        report = remap_variable_tensors(checkpoint["state_dict"], model, ckpt_data_indices, model.data_indices)
+        model._remapped_variable_datasets = set(report)
 
     # Refresh processor stats from the current dataset if configured.
     model._update_checkpoint_state_dict_for_load(checkpoint)
