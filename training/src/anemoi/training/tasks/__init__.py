@@ -9,12 +9,14 @@
 
 from .forecaster import Forecaster
 from .forecaster import OffsetForecaster
+from .latent_forecast import LatentForecast
 from .temporal_downscaler import TemporalDownscaler
 from .timeless import Autoencoder
 
 __all__ = [
     "Autoencoder",
     "Forecaster",
+    "LatentForecast",
     "OffsetForecaster",
     "TemporalDownscaler",
 ]

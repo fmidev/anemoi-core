@@ -87,7 +87,18 @@ class TemporalDownscalerSchema(BaseModel):
     "Whether to include the right boundary in the output."
 
 
+class LatentForecastTaskSchema(BaseModel):
+    target_: Literal["anemoi.training.tasks.latent_forecast.LatentForecast"] = Field(..., alias="_target_")
+    timestep: str = "6h"
+    forecast_steps: NonNegativeInt = 1
+    loss_steps: list[NonNegativeInt] = Field(default_factory=lambda: [0, 1])
+
+
 TaskSchema = Annotated[
-    ForecasterSchema | OffsetForecasterSchema | AutoencoderTaskSchema | TemporalDownscalerSchema,
+    ForecasterSchema
+    | OffsetForecasterSchema
+    | AutoencoderTaskSchema
+    | LatentForecastTaskSchema
+    | TemporalDownscalerSchema,
     Discriminator("target_"),
 ]

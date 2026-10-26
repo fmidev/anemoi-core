@@ -790,8 +790,21 @@ class CheckpointPipelineSchema(BaseModel):
     "Ordered model-modifier stages applied after loading (e.g. FreezingModifierStage)."
 
 
+class LatentTrainingOptions(BaseModel):
+    """Objective selection for joint learning or frozen-codec refinement."""
+
+    mode: Literal["joint", "decoder", "rollout"] = "joint"
+    reconstruction_weight: NonNegativeFloat = 1.0
+    latent_weight: NonNegativeFloat = 1.0
+    lead_weights: list[NonNegativeFloat] = Field(default_factory=lambda: [1.0])
+    validation_decode_steps: list[NonNegativeInt] = Field(default_factory=list)
+
+
 class BaseTrainingSchema(BaseModel):
     """Training configuration."""
+
+    latent: LatentTrainingOptions | None = None
+    "Opt-in latent training objectives; unused by other training methods."
 
     seed: NonNegativeInt | None = Field(default=None, example=None)
     """Base seed of all random number generators. If null, a run continuing from a checkpoint takes the
@@ -862,7 +875,10 @@ class BaseTrainingSchema(BaseModel):
 
 
 class SingleTrainingMethodSchema(BaseModel):
-    target_: Literal["anemoi.training.train.methods.SingleTraining"] = Field(..., alias="_target_")
+    target_: Literal[
+        "anemoi.training.train.methods.SingleTraining",
+        "anemoi.training.train.methods.latent_forecast.LatentForecastTraining",
+    ] = Field(..., alias="_target_")
     "Hydra target for the single training method."
 
 
@@ -878,7 +894,12 @@ class TransportTrainingMethodSchema(BaseModel):
 
 def _training_method_discriminator(v: Any) -> str:
     method = v.get("method", {}) if hasattr(v, "get") else getattr(v, "method", None)
-    return method.get("_target_", "") if hasattr(method, "get") else getattr(method, "target_", "")
+    target = method.get("_target_", "") if hasattr(method, "get") else getattr(method, "target_", "")
+    return (
+        "anemoi.training.train.methods.SingleTraining"
+        if target == "anemoi.training.train.methods.latent_forecast.LatentForecastTraining"
+        else target
+    )
 
 
 class SingleTrainingSchema(BaseTrainingSchema):

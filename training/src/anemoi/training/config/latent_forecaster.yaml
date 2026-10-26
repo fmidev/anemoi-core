@@ -1,0 +1,356 @@
+# Opt-in global latent-forecast example; site settings belong in user configs.
+defaults:
+- config
+- override /model: graphtransformer
+- override /graph: latent_n320_r6
+- override /task: latent_forecast
+- override /training/scalers: latent_forecast
+- override /training/optimization/lr_scheduler: reduce_on_plateau
+- _self_
+data:
+  frequency: 3h
+  datasets:
+    data:
+      forcing:
+      - cos_latitude
+      - cos_longitude
+      - sin_latitude
+      - sin_longitude
+      - lsm
+      - z
+      - cos_julian_day
+      - sin_julian_day
+      - cos_local_time
+      - sin_local_time
+      - insolation
+      diagnostic:
+      - tp
+      - ssrd
+      - strd
+      processors:
+        normalizer:
+          config:
+            std:
+            - q_50
+            - q_100
+            - q_150
+            - q_200
+            - q_250
+            - q_300
+            - q_400
+            - q_500
+            - q_700
+            - q_850
+            - q_925
+            - q_1000
+            - tcw
+            - tp
+            - ssrd
+            max:
+            - z
+            none:
+            - cos_latitude
+            - cos_longitude
+            - sin_latitude
+            - sin_longitude
+            - lsm
+            - cos_julian_day
+            - sin_julian_day
+            - cos_local_time
+            - sin_local_time
+            - insolation
+            - lcc
+            - mcc
+            - hcc
+            - tcc
+dataloader:
+  read_group_size: 1
+  num_workers:
+    training: 1
+    validation: 1
+    test: 1
+  batch_size:
+    training: 1
+    validation: 1
+    test: 1
+  limit_batches:
+    validation: 1.0
+  dataset:
+    dataset: ${system.input.dataset}
+    select:
+    - 10u
+    - 10v
+    - 2d
+    - 2t
+    - msl
+    - skt
+    - sp
+    - tcw
+    - q_50
+    - q_100
+    - q_150
+    - q_200
+    - q_250
+    - q_300
+    - q_400
+    - q_500
+    - q_700
+    - q_850
+    - q_925
+    - q_1000
+    - t_50
+    - t_100
+    - t_150
+    - t_200
+    - t_250
+    - t_300
+    - t_400
+    - t_500
+    - t_700
+    - t_850
+    - t_925
+    - t_1000
+    - u_50
+    - u_100
+    - u_150
+    - u_200
+    - u_250
+    - u_300
+    - u_400
+    - u_500
+    - u_700
+    - u_850
+    - u_925
+    - u_1000
+    - v_50
+    - v_100
+    - v_150
+    - v_200
+    - v_250
+    - v_300
+    - v_400
+    - v_500
+    - v_700
+    - v_850
+    - v_925
+    - v_1000
+    - w_50
+    - w_100
+    - w_150
+    - w_200
+    - w_250
+    - w_300
+    - w_400
+    - w_500
+    - w_700
+    - w_850
+    - w_925
+    - w_1000
+    - z_50
+    - z_100
+    - z_150
+    - z_200
+    - z_250
+    - z_300
+    - z_400
+    - z_500
+    - z_700
+    - z_850
+    - z_925
+    - z_1000
+    - lcc
+    - mcc
+    - hcc
+    - tcc
+    - cos_latitude
+    - cos_longitude
+    - sin_latitude
+    - sin_longitude
+    - lsm
+    - z
+    - cos_julian_day
+    - sin_julian_day
+    - cos_local_time
+    - sin_local_time
+    - insolation
+    - tp
+    - ssrd
+    - strd
+  training:
+    datasets:
+      data:
+        start: '1979-01-01'
+        end: '2021-12-31T21:00:00'
+  validation:
+    datasets:
+      data:
+        start: '2022-01-01'
+        end: '2022-12-31T21:00:00'
+  test:
+    datasets:
+      data:
+        start: '2023-01-01'
+        end: '2025-12-31T21:00:00'
+diagnostics:
+  plot:
+    parameters:
+    - 2t
+    - 10u
+    - 10v
+    - t_850
+    - q_850
+    - z_500
+    callbacks: []
+  benchmark_profiler:
+    memory:
+      enabled: false
+    time:
+      enabled: false
+    speed:
+      enabled: false
+    system:
+      enabled: false
+    model_summary:
+      enabled: false
+    snapshot:
+      enabled: false
+  log:
+    mlflow:
+      tracking_uri: null
+      experiment_name: latent-forecaster
+      run_name: latent-forecast
+system:
+  output:
+    root: output
+  input:
+    dataset: dataset.zarr
+    graph: graph.pt
+model:
+  num_channels: 512
+  model:
+    _target_: anemoi.models.models.latent_forecaster.AnemoiModelLatentForecaster
+  processor:
+    num_layers: 4
+    num_chunks: 2
+    gradient_checkpointing: false
+    layer_kernels:
+      LayerNorm:
+        _target_: anemoi.models.layers.normalization.ConditionalLayerNorm
+        condition_shape: 64
+        zero_init: true
+        autocast: false
+      Linear:
+        _target_: torch.nn.Linear
+      Activation:
+        _target_: torch.nn.GELU
+      QueryNorm:
+        _target_: anemoi.models.layers.normalization.AutocastLayerNorm
+        bias: false
+      KeyNorm:
+        _target_: anemoi.models.layers.normalization.AutocastLayerNorm
+        bias: false
+  encoders:
+    '0':
+      mapper:
+        mlp_hidden_ratio: 6
+        gradient_checkpointing: false
+        _target_: anemoi.models.layers.mapper_stack.StackedGraphTransformerForwardMapper
+        num_layers: 5
+  decoders:
+    '0':
+      target_node_features:
+      - forcings
+      - coordinates
+      - trainable_parameters
+      mapper:
+        gradient_checkpointing: false
+        _target_: anemoi.models.layers.mapper_stack.StackedGraphTransformerBackwardMapper
+        num_layers: 3
+  compile: []
+  latent_skip: true
+  latent:
+    timestep: ${task.timestep}
+    decode_steps: ${task.loss_steps}
+    normalize_state: true
+    static_forcings:
+    - cos_latitude
+    - cos_longitude
+    - sin_latitude
+    - sin_longitude
+    - lsm
+    - z
+    temporal_forcings:
+    - cos_julian_day
+    - sin_julian_day
+    - cos_local_time
+    - sin_local_time
+    - insolation
+    static_embedding:
+      _target_: anemoi.models.layers.mlp.MLP
+      hidden_dim: 64
+      out_features: 32
+      n_extra_layers: 0
+      layer_norm: false
+      layer_kernels: ${model.layer_kernels}
+    temporal_embedding:
+      _target_: anemoi.models.layers.mlp.MLP
+      hidden_dim: 64
+      out_features: 32
+      n_extra_layers: 0
+      layer_norm: false
+      layer_kernels: ${model.layer_kernels}
+    forcing_projector:
+      _target_: anemoi.models.layers.sparse_projector.SparseProjector
+      autocast: false
+      num_chunks: 1
+training:
+  training_loss:
+    datasets:
+      data:
+        scalers:
+        - general_variable
+        - node_weights
+  optimization:
+    lr_scheduler:
+      _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+      mode: min
+      factor: 0.8
+      patience: 30
+      threshold: 0.001
+      threshold_mode: rel
+      min_lr: 1.0e-05
+    lr: 0.001
+    pl_lr_scheduler:
+      interval: epoch
+      monitor: val_multi_dataset_loss
+      strict: true
+  precision: bf16-mixed
+  method:
+    _target_: anemoi.training.train.methods.latent_forecast.LatentForecastTraining
+  validation_metrics:
+    datasets:
+      data:
+        mse:
+          scalers:
+          - node_weights
+          ignore_nans: false
+  metrics:
+    datasets:
+      data:
+      - 2t
+      - 10u
+      - 10v
+      - msl
+      - t_850
+      - q_850
+      - z_500
+  max_steps: 500000
+  latent:
+    mode: joint
+    reconstruction_weight: 1.0
+    latent_weight: 1.0
+    lead_weights:
+    - 1.0
+    validation_decode_steps:
+    - 1
+  checkpoint: null

@@ -1,0 +1,4 @@
+_target_: anemoi.training.tasks.latent_forecast.LatentForecast
+timestep: 6h
+forecast_steps: 1
+loss_steps: [0, 1]
