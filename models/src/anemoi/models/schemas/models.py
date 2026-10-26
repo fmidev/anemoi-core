@@ -36,10 +36,12 @@ from .bounding import BoundingSchema
 from .decoder import GNNDecoderSchema  # noqa: TC001
 from .decoder import GraphTransformerDecoderSchema  # noqa: TC001
 from .decoder import PointWiseBackwardMapperSchema  # noqa: TC001
+from .decoder import StackedGraphTransformerDecoderSchema  # noqa: TC001
 from .decoder import TransformerDecoderSchema  # noqa: TC001
 from .encoder import GNNEncoderSchema  # noqa: TC001
 from .encoder import GraphTransformerEncoderSchema  # noqa: TC001
 from .encoder import PointWiseForwardMapperSchema  # noqa: TC001
+from .encoder import StackedGraphTransformerEncoderSchema  # noqa: TC001
 from .encoder import TransformerEncoderSchema  # noqa: TC001
 from .processor import GNNProcessorSchema  # noqa: TC001
 from .processor import GraphTransformerProcessorSchema  # noqa: TC001
@@ -167,6 +169,7 @@ class EncodersSchema(BaseModel):
     mapper: Union[
         GNNEncoderSchema,
         GraphTransformerEncoderSchema,
+        StackedGraphTransformerEncoderSchema,
         TransformerEncoderSchema,
         PointWiseForwardMapperSchema,
     ] = Field(
@@ -187,6 +190,7 @@ class DecodersSchema(BaseModel):
     mapper: Union[
         GNNDecoderSchema,
         GraphTransformerDecoderSchema,
+        StackedGraphTransformerDecoderSchema,
         TransformerDecoderSchema,
         PointWiseBackwardMapperSchema,
     ] = Field(
@@ -346,6 +350,7 @@ class HierarchicalModelSchema(BaseModelSchema):
     upscale_mapper: Union[
         GNNEncoderSchema,
         GraphTransformerEncoderSchema,
+        StackedGraphTransformerEncoderSchema,
         TransformerEncoderSchema,
         PointWiseForwardMapperSchema,
     ] = Field(
@@ -356,6 +361,7 @@ class HierarchicalModelSchema(BaseModelSchema):
     downscale_mapper: Union[
         GNNDecoderSchema,
         GraphTransformerDecoderSchema,
+        StackedGraphTransformerDecoderSchema,
         TransformerDecoderSchema,
         PointWiseBackwardMapperSchema,
     ] = Field(

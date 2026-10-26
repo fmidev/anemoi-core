@@ -220,7 +220,7 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
 
         Linear = self.layer_factory.Linear
 
-        self.proc = GraphTransformerMapperBlock(
+        self.proc = self._build_mapper_block(
             in_channels=num_channels,
             hidden_dim=compute_mlp_hidden_dim(num_channels, mlp_hidden_ratio),
             out_channels=num_channels,
@@ -245,6 +245,10 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
             f"Invalid shard strategy '{shard_strategy}' for {self.__class__.__name__}. "
             f"Supported strategies are 'heads' and 'edges'."
         )
+
+    def _build_mapper_block(self, **kwargs) -> nn.Module:
+        """Construct the mapper component used by the standard forward paths."""
+        return GraphTransformerMapperBlock(**kwargs)
 
     def prepare_edge_sharding_wrapper(
         self,

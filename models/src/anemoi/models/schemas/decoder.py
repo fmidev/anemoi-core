@@ -14,6 +14,7 @@ from typing import Union
 from pydantic import Field
 from pydantic import NonNegativeFloat
 from pydantic import NonNegativeInt
+from pydantic import PositiveInt
 from pydantic import model_validator
 
 from .common_components import GNNModelComponent
@@ -65,6 +66,16 @@ class GraphTransformerDecoderSchema(TransformerModelComponent):
                 raise TypeError(msg)
 
         return self
+
+
+class StackedGraphTransformerDecoderSchema(GraphTransformerDecoderSchema):
+    """Opt-in graph-transformer mapper with independently parameterised blocks."""
+
+    target_: Literal["anemoi.models.layers.mapper_stack.StackedGraphTransformerBackwardMapper"] = Field(
+        ..., alias="_target_"
+    )
+    num_layers: PositiveInt = Field(default=1)
+    "Number of complete graph-transformer mapper blocks."
 
 
 class TransformerDecoderSchema(TransformerModelComponent):
