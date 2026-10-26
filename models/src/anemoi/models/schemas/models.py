@@ -54,6 +54,8 @@ LOGGER = logging.getLogger(__name__)
 
 
 class DefinedModels(str, Enum):
+    LATENT_FORECASTER = "anemoi.models.models.latent_forecaster.AnemoiModelLatentForecaster"
+    LATENT_FORECASTER_SHORT = "anemoi.models.models.AnemoiModelLatentForecaster"
     ANEMOI_MODEL_ENC_PROC_DEC = "anemoi.models.models.encoder_processor_decoder.AnemoiModelEncProcDec"
     ANEMOI_MODEL_ENC_PROC_DEC_SHORT = "anemoi.models.models.AnemoiModelEncProcDec"
     ANEMOI_ENS_MODEL_ENC_PROC_DEC = "anemoi.models.models.ens_encoder_processor_decoder.AnemoiEnsModelEncProcDec"
@@ -199,7 +201,23 @@ class DecodersSchema(BaseModel):
     )
 
 
+class LatentForecasterOptions(BaseModel):
+    """Opt-in fixed-width atmospheric state and prescribed forcing features."""
+
+    timestep: str = "6h"
+    decode_steps: list[NonNegativeInt] = Field(default_factory=lambda: [0, 1])
+    normalize_state: bool = True
+    forcing_projector: dict = Field(
+        default_factory=lambda: {"_target_": "anemoi.models.layers.sparse_projector.SparseProjector", "autocast": False}
+    )
+    static_forcings: list[str] = Field(default_factory=list)
+    temporal_forcings: list[str] = Field(default_factory=list)
+    static_embedding: dict = Field(default_factory=dict)
+    temporal_embedding: dict = Field(default_factory=dict)
+
+
 class BaseModelSchema(PydanticBaseModel):
+    latent: LatentForecasterOptions | None = None
     keep_batch_sharded: bool = Field(default=True)
     "Keep the input batch and the output of the model sharded"
     sparse_projector: SparseProjectorSchema = Field(default_factory=SparseProjectorSchema)
