@@ -4,6 +4,20 @@
 
 MLflow is the default training tracker for Anemoi.
 
+Training loss is synchronized across distributed ranks by default. To
+report rank-local training loss and avoid synchronizing this metric at
+every step, set:
+
+.. code-block:: yaml
+
+   diagnostics:
+     log:
+       sync_training_loss: false
+
+This affects both step and epoch training-loss values. Gradient
+synchronization and validation metrics are unchanged. Use a synchronized
+validation metric when monitoring distributed validation performance.
+
 *******************
  MLflow quickstart
 *******************

@@ -1084,6 +1084,39 @@ def _make_training_module(
     return module
 
 
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [({}, True), ({"sync_training_loss": True}, True), ({"sync_training_loss": False}, False)],
+)
+def test_training_loss_logging_synchronization(settings: dict, expected: bool) -> None:
+    """Training-loss synchronization is configurable without changing the loss tensor."""
+    loss = torch.tensor(1.0, requires_grad=True)
+    module = SimpleNamespace(
+        config=DictConfig({"diagnostics": {"log": settings}}),
+        _step=MagicMock(return_value=SimpleNamespace(loss=loss)),
+        _get_loss_name=lambda: "multi_dataset",
+        logger_enabled=True,
+        log=MagicMock(),
+        task=SimpleNamespace(log_extra=MagicMock()),
+    )
+
+    output = BaseTrainingModule.training_step(module, {"data": torch.zeros(1, 1)}, 0)
+
+    assert output is loss
+    module.log.assert_called_once_with(
+        "train_multi_dataset_loss",
+        loss,
+        on_epoch=True,
+        on_step=True,
+        prog_bar=True,
+        logger=True,
+        batch_size=1,
+        sync_dist=expected,
+    )
+    output.backward()
+    assert loss.grad.item() == 1.0
+
+
 def test_single_training_step_with_forecaster(monkeypatch: pytest.MonkeyPatch) -> None:
     """SingleTraining._step with Forecaster returns one y_pred per rollout step."""
     data_indices = _data_indices_single()

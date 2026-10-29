@@ -1246,7 +1246,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
             prog_bar=True,
             logger=self.logger_enabled,
             batch_size=batch_size,
-            sync_dist=True,
+            sync_dist=getattr(self.config.diagnostics.log, "sync_training_loss", True),
         )
 
         self.task.log_extra(logger=self.log, logger_enabled=self.logger_enabled)

@@ -518,6 +518,9 @@ class LoggingSchema(BaseModel):
     interval: PositiveInt
     "Logging frequency in batches."
 
+    sync_training_loss: bool = True
+    "Synchronize reported training loss across ranks. Does not affect gradient or validation metric synchronization."
+
     @model_validator(mode="before")
     def inject_default_targets(cls, values: dict[str, Any]) -> dict[str, Any]:  # noqa: N805
 
