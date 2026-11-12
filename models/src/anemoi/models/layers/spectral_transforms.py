@@ -156,6 +156,11 @@ class FFT2D(SpectralTransform):
         data = self.prepare_for_fft(data)
 
         if self.patch_size is None:
+            if data.shape[-1] == 0:
+                # A rank that holds no variable: the spectral losses shard the VARIABLE dim across the
+                # model group, so with fewer variables than ranks some ranks get none. cuFFT/hipFFT
+                # fails on an empty batch (HIPFFT_EXEC_FAILED); the transform of nothing is nothing.
+                return torch.complex(data, torch.zeros_like(data))
             fft = torch.fft.fft2(data, dim=(-2, -3))
             if self.apply_filter:
                 fft *= self.filter.to(device=data.device, dtype=data.dtype)
