@@ -86,6 +86,31 @@ class SkipConnection(BaseResidualConnection):
         x_skip = x[:, self.step, ...]  # x shape: (batch, time, ens, nodes, features)
         return self._expand_time(x_skip, n_step_output)
 
+class NoSkipConnection(BaseResidualConnection):
+    """No skip connection module.
+
+    This layer returns zeros, effectively disabling the residual connection
+    so the model output is not biased by the input.
+
+    This is useful when input observations are sparse or contain missing values,
+    as adding them back to the output can create artefacts.
+    """
+
+    def __init__(self, **_) -> None:
+        super().__init__()
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        grid_shard_sizes=None,
+        model_comm_group=None,
+        n_step_output: int | None = None,
+    ) -> torch.Tensor:
+        """Return zeros with the expected output shape."""
+        x_skip = torch.zeros_like(x[:, -1, ...])  # x shape: (batch, time, ens, nodes, features)
+        return self._expand_time(x_skip, n_step_output)
+
+
 
 def _parse_normalize_methods(normalize_method) -> tuple[str, dict[str, str]]:
     """Parse normalize_method config into (default, {var_name: method}).

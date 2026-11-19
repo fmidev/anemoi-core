@@ -142,6 +142,14 @@ class SpectralOrnsteinConnectionSchema(BaseModel):
     )
 
 
+class NoSkipConnectionSchema(BaseModel):
+    """Schema for disabled residual connections (zeros)."""
+
+    target_: Literal["anemoi.models.layers.residual.NoSkipConnection"] = Field(..., alias="_target_")
+    # Hydra merges `step` from the default SkipConnection config when _target_ is overridden; ignore it.
+    step: int = Field(-1, exclude=True)
+
+
 class ClimatologySkipConnectionSchema(BaseModel):
     """Schema for climatology-based skip connections."""
 
@@ -175,6 +183,7 @@ class ClimatologySkipConnectionSchema(BaseModel):
 
 ResidualConnectionSchema = Annotated[
     SkipConnectionSchema
+    | NoSkipConnectionSchema
     | TruncatedConnectionSchema
     | ClimatologySkipConnectionSchema
     | ScalarOrnsteinConnectionSchema
