@@ -52,6 +52,26 @@ The optional ``trajectory.sampling.stride`` sets the spacing between
 sample anchors within a sequence: ``null`` (the default) gives
 non-overlapping windows and ``1`` keeps every valid position.
 
+Segmented Gridded Data Reader
+-----------------------------
+
+Use a ``segmented`` block instead of ``trajectory`` when a regular valid-time
+series is stitched from fixed-length forecast segments. For example, a dataset
+entry for 18-step segments can be configured as follows:
+
+.. code-block:: yaml
+
+   dataset_config: /path/to/stitched-forecasts.zarr
+   segmented:
+     segment_length: 18
+     reference_date: "2026-01-01T06:00:00"
+
+``reference_date`` is any date on the dataset grid where a segment starts. The
+reader keeps partial segments after date subsetting, but never samples across a
+segment boundary. It aligns with other readers by valid time. By default every
+valid anchor is kept; an optional ``segmented.sampling.stride`` restarts at each
+segment boundary.
+
 Multi-Dataset
 -------------
 

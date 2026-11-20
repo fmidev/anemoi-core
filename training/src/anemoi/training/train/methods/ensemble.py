@@ -38,6 +38,8 @@ LOGGER = logging.getLogger(__name__)
 class EnsembleTraining(BaseTrainingModule):
     """Graph neural network forecaster for ensembles for PyTorch Lightning."""
 
+    checkpoint_loss: bool = True
+
     def __init__(
         self,
         *,
@@ -103,6 +105,10 @@ class EnsembleTraining(BaseTrainingModule):
 
         self.nens_per_device = config.training.ensemble_size_per_device
         self.nens_per_group = self.nens_per_device * num_gpus_per_ensemble // num_gpus_per_model
+
+        # Gradient-checkpoint the loss/metric region (default). Disabling it keeps the loss
+        # intermediates for backward instead of recomputing them: faster, more memory.
+        self.checkpoint_loss = config.training.get("checkpoint_loss", True)
         LOGGER.info("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
         # lazy init ensemble group info, will be set by the DDPEnsGroupStrategy.
@@ -354,16 +360,22 @@ class EnsembleTraining(BaseTrainingModule):
             if weight > 0:
                 # The correctors run on the members held locally, before the loss gathers them.
                 y_pred_loss = self._loss_prediction(y_pred, y)
-                loss_next, metrics_next, y_preds_next = checkpoint(
-                    self.compute_loss_metrics,
-                    y_pred_loss,
-                    y,
+                loss_kwargs = dict(
                     **task_step_kwargs,
                     validation_mode=validation_mode,
                     pred_layout=IndexSpace.MODEL_OUTPUT,
                     target_layout=IndexSpace.DATA_FULL,
-                    use_reentrant=False,
                 )
+                if self.checkpoint_loss:
+                    loss_next, metrics_next, y_preds_next = checkpoint(
+                        self.compute_loss_metrics,
+                        y_pred_loss,
+                        y,
+                        use_reentrant=False,
+                        **loss_kwargs,
+                    )
+                else:
+                    loss_next, metrics_next, y_preds_next = self.compute_loss_metrics(y_pred_loss, y, **loss_kwargs)
                 if y_pred_loss is not y_pred:
                     y_preds_next = self._raw_predictions(y_pred, validation_mode)
             else:

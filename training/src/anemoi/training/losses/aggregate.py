@@ -40,13 +40,24 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
         time_aggregation_types: list[str],
         loss_fn: BaseLoss,
         ignore_nans: bool = False,
+        stack_aggregates: bool = False,
     ) -> None:
+        """Create a loss over time aggregates.
+
+        Parameters
+        ----------
+        stack_aggregates : bool, optional
+            Concatenate all aggregated fields along the time dimension and call the wrapped loss
+            once. Only enable for wrapped losses whose reduction is additive over time.
+            A time scaler falls back to the per-step calls. By default ``False``.
+        """
         super().__init__(loss=loss_fn, ignore_nans=ignore_nans)
         # Each aggregate is scored one step at a time, so losses that span output steps cannot be used here.
         if loss_fn.scores_across_time:
             msg = "TimeAggregateLossWrapper cannot wrap a loss whose score spans several output steps."
             raise ValueError(msg)
         self.time_aggregation_types = time_aggregation_types
+        self.stack_aggregates = stack_aggregates
 
     def forward(
         self,
@@ -123,8 +134,19 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
         if squash_mode is not None:
             shared_kwargs["squash_mode"] = squash_mode
 
-        for agg_op in self.time_aggregation_types:
-            loss = loss + self._compute_agg_loss(agg_op, pred, target, time_weights, shared_kwargs)
+        if self.stack_aggregates and time_weights is None and self.time_aggregation_types:
+            preds, targets = zip(
+                *(self._aggregate(agg_op, pred, target) for agg_op in self.time_aggregation_types),
+                strict=True,
+            )
+            loss = self.loss(
+                pred.clone(data=torch.cat(preds, dim=self._time_axis(pred))),
+                target.clone(data=torch.cat(targets, dim=self._time_axis(target))),
+                **shared_kwargs,
+            )
+        else:
+            for agg_op in self.time_aggregation_types:
+                loss = loss + self._compute_agg_loss(agg_op, pred, target, time_weights, shared_kwargs)
 
         # Average over the number of aggregation types, matching the old per-term
         # normalisation (old code: loss /= num_interp_steps + num_aggregate_ops).
@@ -136,6 +158,24 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
     def _time_axis(source: Source) -> int:
         return source.layout.axis(TensorDim.TIME, ndim=source.data.ndim)
 
+    def _aggregate(self, agg_op: str, pred: Source, target: Source) -> tuple[torch.Tensor, torch.Tensor]:
+        """Aggregate along time, keeping a time axis of size 1 (or T-1 for diff)."""
+        if agg_op == "diff":
+            return torch.diff(pred.data, dim=self._time_axis(pred)), torch.diff(
+                target.data,
+                dim=self._time_axis(target),
+            )
+        agg_fns = {"mean": torch.mean, "min": torch.amin, "max": torch.amax}
+        if agg_op not in agg_fns:
+            msg = f"Unknown aggregation type '{agg_op}'. Supported: 'diff', 'mean', 'min', 'max'."
+            raise ValueError(msg)
+        fn = agg_fns[agg_op]
+        return fn(pred.data, dim=self._time_axis(pred), keepdim=True), fn(
+            target.data,
+            dim=self._time_axis(target),
+            keepdim=True,
+        )
+
     def _compute_agg_loss(
         self,
         agg_op: str,
@@ -145,38 +185,17 @@ class TimeAggregateLossWrapper(BaseLossWrapper):
         shared_kwargs: dict,
     ) -> torch.Tensor:
         """Compute loss for a single aggregation operation."""
-        if agg_op == "diff":
-            return self._compute_diff_loss(pred, target, time_weights, shared_kwargs)
-        agg_fns = {"mean": torch.mean, "min": torch.amin, "max": torch.amax}
-        if agg_op not in agg_fns:
-            msg = f"Unknown aggregation type '{agg_op}'. Supported: 'diff', 'mean', 'min', 'max'."
-            raise ValueError(msg)
-        fn = agg_fns[agg_op]
-        pred_agg = pred.clone(data=fn(pred.data, dim=self._time_axis(pred), keepdim=True))
-        target_agg = target.clone(data=fn(target.data, dim=self._time_axis(target), keepdim=True))
-        return self.loss(pred_agg, target_agg, **shared_kwargs)
+        pred_agg, target_agg = self._aggregate(agg_op, pred, target)
+        if agg_op != "diff":
+            return self.loss(pred.clone(data=pred_agg), target.clone(data=target_agg), **shared_kwargs)
 
-    def _compute_diff_loss(
-        self,
-        pred: Source,
-        target: Source,
-        time_weights: torch.Tensor | None,
-        shared_kwargs: dict,
-    ) -> torch.Tensor:
-        """Compute per-step diff loss, optionally weighted by time scaler."""
-
-        def time_diff(source: Source) -> torch.Tensor:
-            axis, n_time = self._time_axis(source), source.time_size
-            return source.data.narrow(axis, 1, n_time - 1) - source.data.narrow(axis, 0, n_time - 1)
-
-        pred_diff = time_diff(pred)  # (bs, time-1, ens, latlon, nvar)
-        target_diff = time_diff(target)
+        # Score each difference separately, optionally weighted by the time scaler.
         pred_axis, target_axis = self._time_axis(pred), self._time_axis(target)
         loss = torch.tensor(0.0, dtype=pred.dtype, device=pred.device, requires_grad=False)
-        for step in range(pred_diff.shape[pred_axis]):
+        for step in range(pred_agg.shape[pred_axis]):
             step_loss = self.loss(
-                pred.clone(data=pred_diff.narrow(pred_axis, step, 1)),
-                target.clone(data=target_diff.narrow(target_axis, step, 1)),
+                pred.clone(data=pred_agg.narrow(pred_axis, step, 1)),
+                target.clone(data=target_agg.narrow(target_axis, step, 1)),
                 **shared_kwargs,
             )
             if time_weights is not None:

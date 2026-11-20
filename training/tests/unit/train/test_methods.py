@@ -2082,7 +2082,8 @@ def test_ensemble_member_template_describes_tiled_members() -> None:
 # ── EnsembleTraining._step integration ────────────────────────────────────────
 
 
-def test_ensemble_training_step_with_forecaster(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("checkpoint_loss", [False, True])
+def test_ensemble_training_step_with_forecaster(monkeypatch: pytest.MonkeyPatch, checkpoint_loss: bool) -> None:
     """EnsembleTraining._step expands inputs and keeps target ensemble dimension for loss."""
     data_indices = _data_indices_single()
     task = Forecaster(multistep_input=1, multistep_output=1, timestep="6h")
@@ -2101,6 +2102,7 @@ def test_ensemble_training_step_with_forecaster(monkeypatch: pytest.MonkeyPatch)
     forecaster.loss = {"data": DummyLoss()}
     forecaster.loss_supports_sharding = False
     forecaster.metrics_support_sharding = True
+    forecaster.checkpoint_loss = checkpoint_loss
 
     target_shapes = []
 
@@ -2114,8 +2116,14 @@ def test_ensemble_training_step_with_forecaster(monkeypatch: pytest.MonkeyPatch)
         target_shapes.append(next(iter(y.values())).data.shape)
         return torch.zeros(1, dtype=ref.dtype, device=ref.device), {}, y_pred
 
+    checkpoint_calls = []
+
+    def _checkpoint(fn: Any, *args: Any, use_reentrant: bool, **kwargs: Any) -> Any:
+        checkpoint_calls.append(use_reentrant)
+        return fn(*args, **kwargs)
+
     monkeypatch.setattr(forecaster, "compute_loss_metrics", _stub_compute_loss_metrics)
-    monkeypatch.setattr("torch.utils.checkpoint.checkpoint", lambda fn, *a, **kw: fn(*a, **kw))
+    monkeypatch.setattr("anemoi.training.train.methods.ensemble.checkpoint", _checkpoint)
 
     b, e_orig, g, v = 2, 1, 4, len(_NAME_TO_INDEX)
     # offsets=[0h, +6h] → 2 time steps; ensemble dim=1 (will be expanded to nens_per_device=2)
@@ -2128,6 +2136,7 @@ def test_ensemble_training_step_with_forecaster(monkeypatch: pytest.MonkeyPatch)
     # y_pred shape: (b, n_step_output, nens_per_device, g, v)
     assert output.predictions[0]["data"].data.shape == (b, 1, forecaster.nens_per_device, g, v)
     assert target_shapes == [torch.Size((b, 1, 1, g, v))]
+    assert checkpoint_calls == ([False] if checkpoint_loss else [])
 
 
 # ── Multi-step rollout correctness ────────────────────────────────────────────

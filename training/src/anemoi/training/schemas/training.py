@@ -453,6 +453,8 @@ class TimeAggregateLossWrapperSchema(BaseModel):
     "Time aggregation operations to apply over the time dimension before computing the loss."
     loss_fn: BaseLossSchema | CRPSSchema
     "Inner loss function applied to each time-aggregated output."
+    stack_aggregates: bool = False
+    "Evaluate all aggregates in one call for losses that sum over time."
     scalers: list[str] | None = None
     "Scalers to apply to the wrapped loss (delegated to inner loss_fn)."
     ignore_nans: bool = False
@@ -1058,6 +1060,8 @@ class SingleTrainingSchema(BaseTrainingSchema):
 class EnsembleTrainingSchema(BaseTrainingSchema):
     method: EnsembleTrainingMethodSchema
     "Training method."
+    checkpoint_loss: bool = True
+    "Recompute the loss and metrics during backward to save memory."
 
 
 class TransportTrainingConfigSchema(BaseModel):

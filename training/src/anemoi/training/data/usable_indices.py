@@ -38,12 +38,15 @@ class ReaderAnchors:
     base_dates : np.ndarray, optional
         ``(n,)`` forecast initialisation of each anchor, for trajectory readers.
         Anchors of readers without base dates match on ``times`` only.
+    stride_by_sequence : bool, optional
+        Restart the stride at sequence boundaries, without using them as matching keys.
     """
 
     times: np.ndarray
     sequences: np.ndarray
     positions: np.ndarray
     base_dates: np.ndarray | None = None
+    stride_by_sequence: bool = False
 
     def __len__(self) -> int:
         return len(self.times)
@@ -110,11 +113,13 @@ def _stride_steps(
     return stride, grid
 
 
-def _apply_stride(keys: np.ndarray, stride: int, grid: int) -> np.ndarray:
-    """Keep every ``stride``-th grid step per base date, counted from its first anchor."""
+def _stride_mask(keys: np.ndarray, stride: int, grid: int, segment_sequences: list[np.ndarray]) -> np.ndarray:
+    """Keep every ``stride``-th grid step per base date or stitched segment."""
     group_start = np.r_[True, keys["base"][1:] != keys["base"][:-1]]
+    for sequences in segment_sequences:
+        group_start[1:] |= sequences[1:] != sequences[:-1]
     first = np.maximum.accumulate(np.where(group_start, np.arange(len(keys)), 0))
-    return keys[(keys["time"] - keys["time"][first]) % (stride * grid) == 0]
+    return (keys["time"] - keys["time"][first]) % (stride * grid) == 0
 
 
 def compute_valid_anchors(
@@ -137,8 +142,8 @@ def compute_valid_anchors(
     relative_date_indices : dict[str, np.ndarray | list[int]]
         Relative offsets (in each reader's own positions) requested for each reader.
     stride : int | None
-        Keep every ``stride``-th step of the shared anchor grid per base date;
-        ``None`` keeps non-overlapping windows.
+        Keep every ``stride``-th step of the shared anchor grid per base date or
+        stitched segment; ``None`` keeps non-overlapping windows.
 
     Returns
     -------
@@ -167,13 +172,17 @@ def compute_valid_anchors(
         msg = "No valid anchors found after intersection across all datasets."
         raise ValueError(msg)
 
-    if stride != 1:
-        keys = _apply_stride(keys, *_stride_steps(stride, data_readers, relative_date_indices))
-
     rows = {}
     for name, table in valid_anchors.items():
         index = _lookup(table.keys(), _query_for(table, keys))
         rows[name] = np.stack([table.sequences[index], table.positions[index]], axis=1).astype(np.int64)
+
+    if stride != 1:
+        segment_sequences = [rows[name][:, 0] for name, table in valid_anchors.items() if table.stride_by_sequence]
+        steps, grid = _stride_steps(stride, data_readers, relative_date_indices)
+        keep = _stride_mask(keys, steps, grid, segment_sequences)
+        keys = keys[keep]
+        rows = {name: row[keep] for name, row in rows.items()}
 
     LOGGER.info("MultiDataset has %d valid anchors after intersection.", len(keys))
     return Anchors(

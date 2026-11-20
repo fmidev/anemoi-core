@@ -119,6 +119,27 @@ def test_empty_aggregation_returns_zero(pred: torch.Tensor, target: torch.Tensor
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("with_time_scaler", [False, True])
+def test_stacked_aggregates_match_stepwise_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    with_time_scaler: bool,
+) -> None:
+    inner = _make_loss()
+    if with_time_scaler:
+        inner.add_scaler(TensorDim.TIME, torch.tensor([2.0, 3.0, 5.0]), name="time")
+    ops = ["mean", "min", "max", "diff"]
+    stepwise = TimeAggregateLossWrapper(ops, inner)
+    stacked = TimeAggregateLossWrapper(ops, inner, stack_aggregates=True)
+    pred_view, target_view = _gridded_source_view(pred), _gridded_source_view(target)
+    expected = stepwise(pred_view, target_view, squash=False)
+    calls = []
+    with inner.register_forward_pre_hook(lambda _module, args: calls.append(args[0].time_size)):
+        actual = stacked(pred_view, target_view, squash=False)
+    torch.testing.assert_close(actual, expected)
+    assert calls == ([1] * 5 if with_time_scaler else [5])
+
+
 def test_loss_accumulates_across_agg_ops(pred: torch.Tensor, target: torch.Tensor) -> None:
     """Combined wrapper loss equals average of individual wrapper losses."""
     inner = _make_loss()

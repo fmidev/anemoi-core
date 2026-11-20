@@ -11,6 +11,7 @@
 import datetime
 from pathlib import Path
 from typing import Any
+from typing import Self
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
@@ -19,6 +20,7 @@ from pydantic import NonNegativeInt
 from pydantic import PositiveInt
 from pydantic import RootModel
 from pydantic import computed_field
+from pydantic import model_validator
 
 from anemoi.models.schemas.schema_utils import DatasetDict
 from anemoi.training.schemas.training import GenericSchema
@@ -114,6 +116,31 @@ class TrajectoryDataReaderSchema(NativeDatasetSchema):
     "Trajectory configuration."
 
 
+class SegmentedSchema(PydanticBaseModel):
+    """Stitched-segment reader configuration (one valid-time series built from fixed-length forecast segments)."""
+
+    segment_length: PositiveInt
+    "Number of dataset steps per forecast segment (e.g. 18 for 18 hourly lead times)."
+    reference_date: str
+    "Any valid date on which a segment starts; boundaries are reference_date + k * segment_length steps."
+    sampling: TrajectorySamplingSchema | None = Field(default=None)
+    "Anchor sampling config within segments. Default stride=1 (every valid position)."
+
+
+class DatasetReaderSchema(TrajectoryDataReaderSchema):
+    """Dataset reader configuration, optionally with forecast sequence boundaries."""
+
+    segmented: SegmentedSchema | None = Field(default=None)
+    "Segment configuration. Cannot be combined with trajectory configuration."
+
+    @model_validator(mode="after")
+    def check_sequence_config(self) -> Self:
+        if self.trajectory is not None and self.segmented is not None:
+            msg = "Use either 'trajectory' or 'segmented' in a dataset reader configuration, not both."
+            raise ValueError(msg)
+        return self
+
+
 class LoaderSet(BaseModel):
     training: NonNegativeInt | None = Field(example=None)
     "Value for training dataset"
@@ -150,11 +177,11 @@ class DataLoaderSchema(PydanticBaseModel):
     "Per-GPU batch size."
     limit_batches: LoaderSet = Field(example=None)
     "Limit number of batches to run. Default value null, will run on all the batches."
-    training: DatasetDict[NativeDatasetSchema | TrajectoryDataReaderSchema]
+    training: DatasetDict[DatasetReaderSchema]
     "Training DatasetSchema."
-    validation: DatasetDict[NativeDatasetSchema | TrajectoryDataReaderSchema]
+    validation: DatasetDict[DatasetReaderSchema]
     "Validation DatasetSchema."
-    test: DatasetDict[NativeDatasetSchema | TrajectoryDataReaderSchema]
+    test: DatasetDict[DatasetReaderSchema]
     "Test DatasetSchema."
     read_group_size: PositiveInt = Field(example=None)
     "Number of GPUs per reader group. Defaults to number of GPUs (see BaseSchema validators)."

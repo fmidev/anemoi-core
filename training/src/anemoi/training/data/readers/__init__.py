@@ -14,6 +14,7 @@ from omegaconf import DictConfig
 
 from anemoi.training.data.readers.gridded import GriddedDataReader
 from anemoi.training.data.readers.protocol import DataReader
+from anemoi.training.data.readers.segmented import SegmentedGriddedDataReader
 from anemoi.training.data.readers.tabular import TabularDataReader
 from anemoi.training.data.readers.trajectory import TrajectoryDataReader
 from anemoi.training.data.readers.utils import _as_dict
@@ -24,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 __all__ = [
     "DataReader",
     "GriddedDataReader",
+    "SegmentedGriddedDataReader",
     "TabularDataReader",
     "TrajectoryDataReader",
     "create_reader",
@@ -35,10 +37,18 @@ def create_reader(config: dict | DictConfig) -> DataReader:
 
     The reader is chosen from the kind of data, inferred from ``dataset_config`` (tabular
     datasets set a ``window`` and a ``frequency``, all others are gridded), and from whether
-    the entry has a ``trajectory`` block.
+    the entry has a ``trajectory`` or ``segmented`` block.
     """
-    reader_config = _normalize_reader_config(config)
+    reader_config = dict(_normalize_reader_config(config))
     trajectory_config = _as_dict(reader_config.pop("trajectory", None))
+    segmented_config = _as_dict(reader_config.pop("segmented", None))
+
+    if segmented_config is not None:
+        if trajectory_config is not None:
+            msg = "Use either 'trajectory' or 'segmented' in a dataset reader configuration, not both."
+            raise ValueError(msg)
+        LOGGER.info("Creating SegmentedGriddedDataReader...")
+        return SegmentedGriddedDataReader(**reader_config, **segmented_config)
 
     if trajectory_config is not None:
         sampling = _as_dict(trajectory_config.get("sampling")) if isinstance(trajectory_config, dict) else None
