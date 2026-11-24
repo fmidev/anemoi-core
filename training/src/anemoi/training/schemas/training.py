@@ -274,6 +274,7 @@ class ImplementedLossesUsingBaseLossSchema(StrEnum):
     spectral_crps = "anemoi.training.losses.SpectralCRPSLoss"
     power_spectrum = "anemoi.training.losses.PowerSpectrumLoss"
     spectral_amse = "anemoi.training.losses.SpectralAMSELoss"
+    cross_entropy = "anemoi.training.losses.CrossEntropyLoss"
 
 
 class CheckVariablesCompatibilitySchema(BaseModel):
@@ -432,6 +433,13 @@ class MultiscaleConfigOnTheFlySchema(BaseModel):
             )
             raise ValueError(msg)
         return self
+
+
+class CrossEntropyLossSchema(BaseLossSchema):
+    """Schema for CrossEntropyLoss, the cross-entropy of a categorical variable predicted by an ensemble."""
+
+    no_autocast: bool = True
+    "Deactivate autocast for the cross-entropy calculation."
 
 
 class TimeAggregateLossWrapperSchema(BaseModel):
@@ -623,6 +631,7 @@ _LOSS_DISCRIMINATOR_TAGS = {
     "anemoi.training.losses.SpectralAMSELoss": "spectral",
     "anemoi.training.losses.HuberLoss": "huber",
     "anemoi.training.losses.aggregate.TimeAggregateLossWrapper": "time_aggregate",
+    "anemoi.training.losses.CrossEntropyLoss": "cross_entropy",
 }
 
 
@@ -656,7 +665,8 @@ class CombinedLossSchema(BaseLossSchema):
             | Annotated[GraphEdgeEnergyScoreLossSchema, Tag("graph_edge_energy_score")]
             | Annotated[SpectralLossSchema, Tag("spectral")]
             | Annotated[MultiScaleLossSchema, Tag("multiscale")]
-            | Annotated[TimeAggregateLossWrapperSchema, Tag("time_aggregate")],
+            | Annotated[TimeAggregateLossWrapperSchema, Tag("time_aggregate")]
+            | Annotated[CrossEntropyLossSchema, Tag("cross_entropy")],
             Discriminator(_loss_discriminator),
         ]
     ] = Field(min_length=1)
@@ -716,7 +726,8 @@ LossSchemas = Annotated[
     | Annotated[GraphEdgeEnergyScoreLossSchema, Tag("graph_edge_energy_score")]
     | Annotated[SpectralLossSchema, Tag("spectral")]
     | Annotated[TimeAggregateLossWrapperSchema, Tag("time_aggregate")]
-    | Annotated[MultiScaleLossSchema, Tag("multiscale")],
+    | Annotated[MultiScaleLossSchema, Tag("multiscale")]
+    | Annotated[CrossEntropyLossSchema, Tag("cross_entropy")],
     Discriminator(_loss_discriminator),
 ]
 

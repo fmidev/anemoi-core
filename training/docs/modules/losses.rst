@@ -97,6 +97,8 @@ The following probabilistic loss functions are available by default:
    averaging.
 -  ``WeightedMSELoss``: MSE with noise-level weights for EDM diffusion
    transport models.
+-  ``CrossEntropyLoss``: cross-entropy for a categorical variable
+   predicted by an ensemble, see :ref:`categorical-loss-functions`.
 
 The config for these loss functions is the same as for the
 deterministic:
@@ -115,6 +117,87 @@ deterministic:
 The ensemble examples below use the standard global ensemble scaler set. Adapt
 the list when the selected training scaler configuration defines different
 scalers.
+
+.. _categorical-loss-functions:
+
+****************************
+ Categorical Loss Functions
+****************************
+
+``CrossEntropyLoss`` is a cross-entropy loss for a categorical
+variable, such as precipitation type, predicted by an ensemble. The
+categorical variable is stored in the dataset as one variable per class,
+and the loss sees exactly these class variables:
+
+-  the predictions are unnormalised logits, one per class and ensemble
+   member. A softmax over the classes turns them into probabilities;
+-  the targets are a one-hot or soft (fractional) class distribution, so
+   the class variables must not be normalised
+-  the class order is the order of the class variables in the dataset.
+
+Select the class variables with ``predicted_variables``, normally as one
+child of a ``CombinedLoss`` next to the loss for the other variables, as in
+the example at the end of this section.
+
+Each of the M ensemble members is scored on its own and the losses are
+averaged: ``-(1/M) sum_m sum_c q(c) log p_m(c)``, where ``q`` is the target
+distribution and ``p_m`` the probabilities of member ``m``. Every member is
+trained to predict calibrated class probabilities, and the forecast
+probability is the mean of the members' probabilities, over any number of
+members (for example two members in training and 50 at inference). With one
+member this is the usual cross-entropy.
+
+With ``ignore_nans: true`` a grid point where any class of the target, or of
+any member's logits, is NaN does not contribute to the loss.
+
+The loss returns one term ``-q(c) log p(c)`` per class, so scalers on the
+variable dimension and the usual reduction apply. With the default
+``squash_mode="avg"`` the class terms are averaged, so the reported loss is
+the cross-entropy divided by the number of classes ``C``.
+
+Optional per-class weights are set with a variable scaler such as
+``general_variable``. For a one-hot target this multiplies the cross-entropy
+at each grid point by the weight of the observed class. Classes with larger
+weights then get higher probabilities than their observed frequency, so the
+probabilities are no longer calibrated. The weights are set per class
+variable in the scaler config, and the loss must list the scaler:
+
+.. code:: yaml
+
+   scalers:
+     datasets:
+       my_dataset_name:
+         general_variable:
+           _target_: anemoi.training.losses.scalers.GeneralVariableLossScaler
+           weights:
+             default: 1
+             ptype_rain: 0.4
+             ptype_snow: 0.8
+             ptype_sleet: 2.0
+
+   training_loss:
+     datasets:
+       your_dataset_name:
+         _target_: anemoi.training.losses.CrossEntropyLoss
+         predicted_variables: [ptype_rain, ptype_snow, ptype_sleet]
+         scalers: [general_variable, node_weights]
+
+The example below trains the continuous variables with CRPS and the
+precipitation type classes with the cross-entropy:
+
+.. code:: yaml
+
+   training_loss:
+     datasets:
+       my_dataset_name:
+         _target_: anemoi.training.losses.combined.CombinedLoss
+         scalers: [node_weights, time_steps]
+         loss_weights: [1.0, 1.0]
+         losses:
+           - _target_: anemoi.training.losses.CRPS
+             predicted_variables: [2t, msl, 10u, 10v]
+           - _target_: anemoi.training.losses.CrossEntropyLoss
+             predicted_variables: [ptype_rain, ptype_snow, ptype_sleet]
 
 ************************
  Combined Loss Functions
